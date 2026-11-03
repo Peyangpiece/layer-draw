@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, createGroup, createRasterLayer, findNode, insertNode, listRasterLayers, moveNode, removeNode, updateNode } from "./document";
+import { createDocument, createGroup, createRasterLayer, displayIndex, findNode, insertNode, listRasterLayers, moveNode, removeNode, replaceNode, updateNode, visibleRasterLayersFrontToBack } from "./document";
 import { canUndo, commit, createHistory, push, redo, replace, undo } from "./history";
 
 const layer = (name: string) => createRasterLayer({ name, bitmapId: name, bounds: { x: 0, y: 0, w: 1, h: 1 } });
@@ -18,6 +18,23 @@ describe("document ops", () => {
     expect(listRasterLayers(removeNode(doc, b.id).root).map((l) => l.name)).toEqual(["a", "c"]);
     const d = layer("d");
     expect(listRasterLayers(insertNode(doc, d, 0, doc.root.children[1]!.id).root).map((l) => l.name)).toEqual(["a", "d", "b", "c"]);
+  });
+});
+
+describe("replaceNode / 表示順", () => {
+  const a = layer("a"), b = layer("b"), c = layer("c");
+  const g = createGroup("g", [b]);
+  const doc = createDocument("t", 10, 10, createGroup("root", [a, g, c]));
+  it("ネストしたノードを同じ位置で複数ノードに置き換える", () => {
+    const x = layer("x"), y = layer("y");
+    expect(listRasterLayers(replaceNode(doc, b.id, [x, y]).root).map((l) => l.name)).toEqual(["a", "x", "y", "c"]);
+    expect(listRasterLayers(replaceNode(doc, b.id, []).root).map((l) => l.name)).toEqual(["a", "c"]);
+  });
+  it("表示中のレイヤーを前面から列挙し、非表示フォルダの中身は除く", () => {
+    expect(visibleRasterLayersFrontToBack(doc.root).map((l) => l.name)).toEqual(["a", "b", "c"]);
+    const hidden = updateNode(doc, g.id, { visible: false });
+    expect(visibleRasterLayersFrontToBack(hidden.root).map((l) => l.name)).toEqual(["a", "c"]);
+    expect(displayIndex(doc.root, c.id)).toBeGreaterThan(displayIndex(doc.root, b.id));
   });
 });
 

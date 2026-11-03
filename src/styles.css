@@ -70,8 +70,14 @@ button:disabled { opacity: .45; cursor: default; }
   flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
   overflow: hidden;
 }
+.canvas-stack { position: relative; flex-shrink: 0; }
+.canvas-overlay { position: absolute; inset: 0; touch-action: none; }
+.canvas-overlay.tool-select { cursor: pointer; }
+.canvas-overlay.tool-split { cursor: crosshair; }
+.tool-group { display: flex; gap: 4px; flex-wrap: wrap; }
+button.active { background: var(--selected); border-color: var(--accent); color: var(--accent); }
 .canvas {
-  max-width: 100%; max-height: 100%;
+  display: block;
   box-shadow: 0 0 0 1px var(--border);
   background: repeating-conic-gradient(var(--checker-a) 0 25%, var(--checker-b) 0 50%) 0 0 / 16px 16px;
 }

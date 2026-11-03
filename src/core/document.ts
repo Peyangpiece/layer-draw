@@ -154,3 +154,40 @@ export function listRasterLayers(group: LayerGroup): RasterLayer[] {
   }
   return out;
 }
+
+/** ノード id を、同じ位置で nodes（先頭が前面）に置き換える。nodes が空なら削除と同じ */
+export function replaceNode(doc: LayerDocument, id: string, nodes: LayerNode[]): LayerDocument {
+  const walk = (g: LayerGroup): LayerGroup => ({
+    ...g,
+    children: g.children.flatMap((c) => (c.id === id ? nodes : c.kind === "group" ? [walk(c)] : [c])),
+  });
+  return touch(doc, walk(doc.root));
+}
+
+/**
+ * 表示されているラスタレイヤーを前面から背面の順に列挙する。
+ * 非表示のフォルダの中身は含めない。
+ */
+export function visibleRasterLayersFrontToBack(group: LayerGroup): RasterLayer[] {
+  const out: RasterLayer[] = [];
+  for (const child of group.children) {
+    if (!child.visible) continue;
+    if (child.kind === "raster") out.push(child);
+    else out.push(...visibleRasterLayersFrontToBack(child));
+  }
+  return out;
+}
+
+/** 表示順（前面が先）での位置。見つからなければ -1 */
+export function displayIndex(group: LayerGroup, id: string): number {
+  let i = 0;
+  const walk = (g: LayerGroup): boolean => {
+    for (const c of g.children) {
+      if (c.id === id) return true;
+      i++;
+      if (c.kind === "group" && walk(c)) return true;
+    }
+    return false;
+  };
+  return walk(group) ? i : -1;
+}

@@ -4,20 +4,26 @@
  */
 import { createContext, useContext, useMemo, useReducer, type Dispatch, type ReactNode } from "react";
 import { BitmapStore } from "../core/bitmapStore";
-import { findNode, moveNode, removeNode, updateNode } from "../core/document";
+import { findNode, moveNode, removeNode, replaceNode, updateNode } from "../core/document";
 import { commit, createHistory, push, redo, replace, undo, type History } from "../core/history";
 import type { LayerDocument, LayerNode } from "../core/types";
 
 export interface EditorState {
   history: History<LayerDocument> | null;
-  selectedId: string | null;
+  /** 選択中のノード。末尾が主選択（プロパティ表示の対象） */
+  selectedIds: string[];
 }
 
 export type NodePatch = Partial<Pick<LayerNode, "name" | "visible" | "opacity" | "blendMode" | "clipping" | "locked">>;
 
 export type EditorAction =
   | { type: "open"; doc: LayerDocument }
-  | { type: "select"; id: string | null }
+  /** mode: replace=置き換え, toggle=追加/解除 */
+  | { type: "select"; id: string | null; mode?: "replace" | "toggle" }
+  /** 1 つのノードを複数ノードに置き換える（パーツ分割）。select で置き換え後の選択を指定 */
+  | { type: "replaceNode"; id: string; nodes: LayerNode[]; select?: string[] }
+  /** 複数ノードを削除し、merged を insertAt の位置に置く（パーツ結合） */
+  | { type: "mergeNodes"; ids: string[]; merged: LayerNode; insertAt: string }
   /** commit=false のときは履歴に積まない（スライダーのドラッグ中など） */
   | { type: "patch"; id: string; patch: NodePatch; commit?: boolean }
   | { type: "commit" }
@@ -30,13 +36,30 @@ export type EditorAction =
 
 function reducer(state: EditorState, action: EditorAction): EditorState {
   if (action.type === "open") {
-    return { history: createHistory(action.doc), selectedId: null };
+    return { history: createHistory(action.doc), selectedIds: [] };
   }
   const h = state.history;
   if (!h) return state;
   switch (action.type) {
-    case "select":
-      return { ...state, selectedId: action.id };
+    case "select": {
+      if (action.id === null) return { ...state, selectedIds: [] };
+      if (action.mode === "toggle") {
+        const has = state.selectedIds.includes(action.id);
+        return { ...state, selectedIds: has ? state.selectedIds.filter((i) => i !== action.id) : [...state.selectedIds, action.id] };
+      }
+      return { ...state, selectedIds: [action.id] };
+    }
+    case "replaceNode":
+      return {
+        history: push(h, replaceNode(h.present, action.id, action.nodes)),
+        selectedIds: action.select ?? state.selectedIds.filter((i) => i !== action.id),
+      };
+    case "mergeNodes": {
+      // insertAt の位置を merged で置き換え、残りを削除する
+      let doc = replaceNode(h.present, action.insertAt, [action.merged]);
+      for (const id of action.ids) if (id !== action.insertAt) doc = removeNode(doc, id);
+      return { history: push(h, doc), selectedIds: [action.merged.id] };
+    }
     case "patch": {
       const next = updateNode(h.present, action.id, action.patch);
       return { ...state, history: action.commit === false ? replace(h, next) : push(h, next) };
@@ -55,15 +78,24 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     case "remove":
       return {
         history: push(h, removeNode(h.present, action.id)),
-        selectedId: state.selectedId === action.id ? null : state.selectedId,
+        selectedIds: state.selectedIds.filter((i) => i !== action.id),
       };
     case "move":
       return { ...state, history: push(h, moveNode(h.present, action.id, action.delta)) };
-    case "undo":
-      return { ...state, history: undo(h) };
-    case "redo":
-      return { ...state, history: redo(h) };
+    case "undo": {
+      const next = undo(h);
+      return { history: next, selectedIds: keepExisting(next.present, state.selectedIds) };
+    }
+    case "redo": {
+      const next = redo(h);
+      return { history: next, selectedIds: keepExisting(next.present, state.selectedIds) };
+    }
   }
+}
+
+/** 取り消し等で存在しなくなったノードを選択から外す */
+function keepExisting(doc: LayerDocument, ids: string[]): string[] {
+  return ids.filter((id) => findNode(doc.root, id) !== undefined);
 }
 
 interface EditorContextValue {
@@ -75,7 +107,7 @@ interface EditorContextValue {
 const EditorContext = createContext<EditorContextValue | null>(null);
 
 export function EditorProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, { history: null, selectedId: null });
+  const [state, dispatch] = useReducer(reducer, { history: null, selectedIds: [] });
   const bitmaps = useMemo(() => new BitmapStore(), []);
   const value = useMemo(() => ({ state, dispatch, bitmaps }), [state, bitmaps]);
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

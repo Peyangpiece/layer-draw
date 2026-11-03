@@ -37,7 +37,9 @@ export function LayerPanel({ doc }: { doc: LayerDocument }) {
 
 function LayerRow({ node, depth }: { node: LayerNode; depth: number }) {
   const { state, dispatch, bitmaps } = useEditor();
-  const selected = state.selectedId === node.id;
+  const selected = state.selectedIds.includes(node.id);
+  // プロパティは主選択（最後に選んだもの）にだけ表示する
+  const primary = state.selectedIds[state.selectedIds.length - 1] === node.id;
   const patch = (p: NodePatch, commit = true) =>
     dispatch({ type: "patch", id: node.id, patch: p, commit });
 
@@ -46,7 +48,8 @@ function LayerRow({ node, depth }: { node: LayerNode; depth: number }) {
       <div
         className={`layer-row${selected ? " selected" : ""}`}
         style={{ paddingLeft: 8 + depth * 16 }}
-        onClick={() => dispatch({ type: "select", id: node.id })}
+        aria-selected={selected}
+        onClick={(e) => dispatch({ type: "select", id: node.id, mode: e.shiftKey || e.ctrlKey || e.metaKey ? "toggle" : "replace" })}
       >
         <button
           className="icon"
@@ -70,7 +73,7 @@ function LayerRow({ node, depth }: { node: LayerNode; depth: number }) {
         {node.kind === "raster" && node.isReference && <span className="badge">参照</span>}
       </div>
 
-      {selected && (
+      {primary && (
         <div className="layer-props" style={{ paddingLeft: 8 + depth * 16 }}>
           <label>
             不透明度 {Math.round(node.opacity * 100)}%

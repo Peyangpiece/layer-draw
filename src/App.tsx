@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { findNode } from "./core/document";
 import { canRedo, canUndo } from "./core/history";
 import { runDecompose, type DecomposeJob } from "./decompose/client";
 import { DEFAULT_DECOMPOSE_PARAMS, type DecomposeParams, type DecomposeStage } from "./decompose/types";
@@ -6,7 +7,8 @@ import { ACCEPT_ATTR } from "./io/formats";
 import { importImageFile, type ImportedImage } from "./io/importImage";
 import { buildDocumentFromImport } from "./store/buildFromImport";
 import { useEditor } from "./store/editorStore";
-import { CanvasView } from "./ui/CanvasView";
+import { mergeSelected } from "./store/partActions";
+import { CanvasView, type CanvasTool } from "./ui/CanvasView";
 import { DecomposePanel } from "./ui/DecomposePanel";
 import { LayerPanel } from "./ui/LayerPanel";
 
@@ -27,7 +29,24 @@ export function App() {
   const [busy, setBusy] = useState<Busy>(null);
   const [messages, setMessages] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [tool, setTool] = useState<CanvasTool>("select");
+  const [multiSelect, setMultiSelect] = useState(false);
   const h = state.history;
+  const showMessage = useCallback((m: string) => setMessages([m]), []);
+
+  // 結合できるのは選択中のパーツが 2 つ以上のとき
+  const selectedPartCount = h
+    ? state.selectedIds.filter((id) => {
+        const n = findNode(h.present.root, id);
+        return n?.kind === "raster" && n.role === "part";
+      }).length
+    : 0;
+  const merge = () => {
+    if (!h) return;
+    const r = mergeSelected(h.present, bitmaps, state.selectedIds);
+    if (r.ok) dispatch(r.action);
+    showMessage(r.ok ? r.message : r.reason);
+  };
 
   /** 自動分解を実行し、結果を新しいドキュメントとして開く */
   const decomposeAndOpen = useCallback(
@@ -88,9 +107,13 @@ export function App() {
     [h, bitmaps, decomposeAndOpen],
   );
 
-  // キーボードショートカット: Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y
+  // キーボードショートカット: Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y, Esc（選択解除）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        dispatch({ type: "select", id: null });
+        return;
+      }
       if (!(e.ctrlKey || e.metaKey)) return;
       const k = e.key.toLowerCase();
       if (k === "z") {
@@ -141,6 +164,24 @@ export function App() {
         <button disabled={!h || !canRedo(h)} onClick={() => dispatch({ type: "redo" })}>
           やり直し
         </button>
+        {h && (
+          <div className="tool-group" role="group" aria-label="ツール">
+            <button aria-pressed={tool === "select"} className={tool === "select" ? "active" : ""} onClick={() => setTool("select")}>
+              選択
+            </button>
+            <button aria-pressed={tool === "split"} className={tool === "split" ? "active" : ""} onClick={() => setTool("split")}>
+              分割
+            </button>
+            {tool === "select" && (
+              <button aria-pressed={multiSelect} className={multiSelect ? "active" : ""} onClick={() => setMultiSelect((v) => !v)}>
+                複数選択
+              </button>
+            )}
+            <button disabled={selectedPartCount < 2} onClick={merge}>
+              結合{selectedPartCount >= 2 ? `（${selectedPartCount}）` : ""}
+            </button>
+          </div>
+        )}
         {h && <span className="doc-info">{h.present.name} — {h.present.width}×{h.present.height}</span>}
       </header>
 
@@ -155,7 +196,7 @@ export function App() {
       <main className="workspace">
         {h ? (
           <>
-            <CanvasView doc={h.present} />
+            <CanvasView doc={h.present} tool={tool} multiSelect={multiSelect} onMessage={showMessage} />
             <aside className="side-panel">
               {h.present.source && (
                 <DecomposePanel key={h.present.id} initial={h.present.source.params} onRun={(p) => void redecompose(p)} disabled={!!busy} />
