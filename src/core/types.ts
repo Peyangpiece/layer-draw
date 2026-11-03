@@ -2,6 +2,7 @@
  * ドキュメント／レイヤーのデータモデル（仕様書 8章）。
  * ピクセルデータは持たず、bitmapId で BitmapStore を参照する。
  */
+import type { DecomposeParams } from "../decompose/types";
 
 export type BlendMode =
   | "normal"
@@ -73,6 +74,8 @@ export interface SourceImageInfo {
   /** 元画像の寸法（SVG の場合はラスタライズ前の論理サイズ） */
   originalWidth: number;
   originalHeight: number;
+  /** 直近の自動分解に使ったパラメータ（再分解の初期値） */
+  params: DecomposeParams;
 }
 
 export interface LayerDocument {

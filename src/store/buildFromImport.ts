@@ -11,7 +11,7 @@
 import type { BitmapStore } from "../core/bitmapStore";
 import { createDocument, createGroup, createRasterLayer } from "../core/document";
 import type { LayerDocument, LayerNode } from "../core/types";
-import type { DecomposeResult, RasterImage } from "../decompose/types";
+import type { DecomposeParams, DecomposeResult, RasterImage } from "../decompose/types";
 import type { ImportedImage } from "../io/importImage";
 
 /** RasterImage を ImageData に変換（バッファはコピーせず共有） */
@@ -28,6 +28,7 @@ export function solidImage(width: number, height: number, rgba: [number, number,
 export function buildDocumentFromImport(
   imported: ImportedImage,
   result: DecomposeResult,
+  params: DecomposeParams,
   store: BitmapStore,
 ): LayerDocument {
   const { width, height } = imported.image;
@@ -81,6 +82,37 @@ export function buildDocumentFromImport(
       fileName: imported.fileName,
       originalWidth: imported.originalWidth,
       originalHeight: imported.originalHeight,
+      params,
     },
   };
+}
+
+/**
+ * パーツの塗り色を変えた新しいビットマップを作る（コピーオンライト）。
+ * アルファ（パーツの形）は保持し、RGB だけを置き換える。
+ */
+export function recolorBitmap(src: ImageData, hex: string): ImageData {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  const out = new Uint8ClampedArray(src.data);
+  for (let i = 0; i < out.length; i += 4) {
+    if (out[i + 3] === 0) continue;
+    out[i] = r; out[i + 1] = g; out[i + 2] = b;
+  }
+  return new ImageData(out, src.width, src.height);
+}
+
+/** ドキュメント群（取り消し履歴を含む）が参照しているビットマップ ID を集める */
+export function collectBitmapIds(docs: Iterable<LayerDocument>): Set<string> {
+  const ids = new Set<string>();
+  const walk = (nodes: LayerNode[]) => {
+    for (const n of nodes) {
+      if (n.kind === "raster") ids.add(n.bitmapId);
+      else walk(n.children);
+    }
+  };
+  for (const d of docs) {
+    walk(d.root.children);
+    if (d.source) ids.add(d.source.bitmapId);
+  }
+  return ids;
 }

@@ -1,4 +1,5 @@
 import type { BlendMode, LayerDocument, LayerNode } from "../core/types";
+import { collectBitmapIds, recolorBitmap } from "../store/buildFromImport";
 import { useEditor, type NodePatch } from "../store/editorStore";
 
 const BLEND_LABELS: [BlendMode, string][] = [
@@ -23,19 +24,19 @@ const BLEND_LABELS: [BlendMode, string][] = [
 
 export function LayerPanel({ doc }: { doc: LayerDocument }) {
   return (
-    <aside className="layer-panel" aria-label="レイヤー">
+    <section className="layer-panel" aria-label="レイヤー">
       <h2>レイヤー</h2>
       <ul className="layer-list">
         {doc.root.children.map((n) => (
           <LayerRow key={n.id} node={n} depth={0} />
         ))}
       </ul>
-    </aside>
+    </section>
   );
 }
 
 function LayerRow({ node, depth }: { node: LayerNode; depth: number }) {
-  const { state, dispatch } = useEditor();
+  const { state, dispatch, bitmaps } = useEditor();
   const selected = state.selectedId === node.id;
   const patch = (p: NodePatch, commit = true) =>
     dispatch({ type: "patch", id: node.id, patch: p, commit });
@@ -63,6 +64,9 @@ function LayerRow({ node, depth }: { node: LayerNode; depth: number }) {
           {node.kind === "group" ? "📁 " : ""}
           {node.name}
         </span>
+        {node.kind === "raster" && node.role === "part" && node.part?.fillColor && (
+          <span className="swatch" style={{ background: node.part.fillColor }} aria-hidden />
+        )}
         {node.kind === "raster" && node.isReference && <span className="badge">参照</span>}
       </div>
 
@@ -90,6 +94,27 @@ function LayerRow({ node, depth }: { node: LayerNode; depth: number }) {
               ))}
             </select>
           </label>
+          {node.kind === "raster" && node.role === "part" && (
+            <label>
+              パーツの色
+              <input
+                type="color"
+                value={node.part?.fillColor ?? "#ffffff"}
+                onChange={(e) => {
+                  const src = bitmaps.get(node.bitmapId);
+                  if (!src) return;
+                  const bitmapId = bitmaps.add(recolorBitmap(src, e.target.value));
+                  dispatch({ type: "setPartFill", id: node.id, bitmapId, fillColor: e.target.value, commit: false });
+                }}
+                onBlur={() => {
+                  dispatch({ type: "commit" });
+                  // 履歴から参照されなくなった途中の色のビットマップを解放する
+                  const h = state.history;
+                  if (h) bitmaps.gc(collectBitmapIds([...h.past, h.present, ...h.future, ...(h.pending ? [h.pending] : [])]));
+                }}
+              />
+            </label>
+          )}
           <label className="check">
             <input type="checkbox" checked={node.clipping} onChange={(e) => patch({ clipping: e.target.checked })} />
             クリッピング

@@ -4,7 +4,7 @@
  */
 import { createContext, useContext, useMemo, useReducer, type Dispatch, type ReactNode } from "react";
 import { BitmapStore } from "../core/bitmapStore";
-import { moveNode, removeNode, updateNode } from "../core/document";
+import { findNode, moveNode, removeNode, updateNode } from "../core/document";
 import { commit, createHistory, push, redo, replace, undo, type History } from "../core/history";
 import type { LayerDocument, LayerNode } from "../core/types";
 
@@ -21,6 +21,8 @@ export type EditorAction =
   /** commit=false のときは履歴に積まない（スライダーのドラッグ中など） */
   | { type: "patch"; id: string; patch: NodePatch; commit?: boolean }
   | { type: "commit" }
+  /** パーツの塗り色を変更（新しい bitmapId に差し替え）。commit=false で履歴に積まない */
+  | { type: "setPartFill"; id: string; bitmapId: string; fillColor: string; commit?: boolean }
   | { type: "remove"; id: string }
   | { type: "move"; id: string; delta: number }
   | { type: "undo" }
@@ -41,6 +43,15 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     }
     case "commit":
       return { ...state, history: commit(h) };
+    case "setPartFill": {
+      const node = findNode(h.present.root, action.id);
+      if (!node || node.kind !== "raster") return state;
+      const next = updateNode(h.present, action.id, {
+        bitmapId: action.bitmapId,
+        part: { ...node.part, fillColor: action.fillColor },
+      });
+      return { ...state, history: action.commit === false ? replace(h, next) : push(h, next) };
+    }
     case "remove":
       return {
         history: push(h, removeNode(h.present, action.id)),

@@ -1,0 +1,69 @@
+import { useState } from "react";
+import type { DecomposeParams, FillMode, LineartMethod } from "../decompose/types";
+
+/** 自動分解パラメータの調整と再分解（仕様書 UC-1 手順 4, 6.2 再分解） */
+export function DecomposePanel({
+  initial,
+  onRun,
+  disabled,
+}: {
+  initial: DecomposeParams;
+  onRun: (p: DecomposeParams) => void;
+  disabled: boolean;
+}) {
+  const [p, setP] = useState(initial);
+  const setL = (patch: Partial<DecomposeParams["lineart"]>) => setP({ ...p, lineart: { ...p.lineart, ...patch } });
+  const setS = (patch: Partial<DecomposeParams["segment"]>) => setP({ ...p, segment: { ...p.segment, ...patch } });
+
+  return (
+    <details className="decompose-panel">
+      <summary>分解の設定</summary>
+      <div className="fields">
+        <label>
+          線画抽出
+          <select value={p.lineart.method} onChange={(e) => setL({ method: e.target.value as LineartMethod })}>
+            <option value="tophat">周囲より暗い細い線（塗りあり・撮影向け）</option>
+            <option value="lightness">暗い部分すべて（白い紙の線画向け）</option>
+          </select>
+        </label>
+        {p.lineart.method === "tophat" && (
+          <Range label="線とみなす最大の太さ" unit="px" min={2} max={64} step={1} value={p.lineart.maxLineWidth} onChange={(v) => setL({ maxLineWidth: v })} />
+        )}
+        <Range label="線の判定しきい値" unit="%" min={5} max={95} step={5} value={Math.round(p.segment.lineThreshold * 100)} onChange={(v) => setS({ lineThreshold: v / 100 })} />
+        <Range label="隙間閉じ（半径）" unit="px" min={0} max={10} step={1} value={p.segment.gapRadius} onChange={(v) => setS({ gapRadius: v })} hint={`幅 ${p.segment.gapRadius * 2}px までの線の途切れを閉じます`} />
+        <Range label="色の違いの許容量" unit="" min={0} max={441} step={1} value={p.segment.colorTolerance} onChange={(v) => setS({ colorTolerance: v })} hint="大きいほど色で領域を分けなくなります" />
+        <Range label="小さい領域を吸収" unit="‰" min={0} max={10} step={0.1} value={Math.round(p.segment.minAreaRatio * 10000) / 10} onChange={(v) => setS({ minAreaRatio: v / 1000 })} hint="画像全体に対する面積の割合" />
+        <Range label="パーツ数の上限" unit="" min={1} max={256} step={1} value={p.segment.maxParts} onChange={(v) => setS({ maxParts: v })} />
+        <label>
+          パーツの色
+          <select value={p.segment.fill} onChange={(e) => setS({ fill: e.target.value as FillMode })}>
+            <option value="auto">自動（線画のみなら自動配色）</option>
+            <option value="source">元画像の色</option>
+            <option value="palette">自動配色</option>
+            <option value="white">白</option>
+          </select>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={p.segment.borderAsBackground} onChange={(e) => setS({ borderAsBackground: e.target.checked })} />
+          画像の端に接する領域は背景にする
+        </label>
+        <button className="primary" disabled={disabled} onClick={() => onRun(p)}>
+          この設定で再分解
+        </button>
+      </div>
+    </details>
+  );
+}
+
+function Range(props: { label: string; unit: string; min: number; max: number; step: number; value: number; onChange: (v: number) => void; hint?: string }) {
+  return (
+    <label>
+      <span>
+        {props.label}: {props.value}
+        {props.unit}
+      </span>
+      <input type="range" min={props.min} max={props.max} step={props.step} value={props.value} onChange={(e) => props.onChange(Number(e.target.value))} />
+      {props.hint && <small className="hint">{props.hint}</small>}
+    </label>
+  );
+}

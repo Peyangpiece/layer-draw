@@ -3,13 +3,15 @@
  *
  * 実装状況:
  *   [済] 1. 線画抽出（L-1 明度→アルファ）
- *   [未] 2. 領域分割（二値マスク・隙間閉じ・ラベリング・色クラスタリング）
- *   [未] 3. パーツ統合・ノイズ除去
- *   [未] 4. 線下補完
- *   [未] 5. パーツのレイヤー化
- * 未実装ステージは空の結果を返し、パイプラインの骨格だけを通す。
+ *   [済] 2. 領域分割（二値マスク・隙間閉じ・ラベリング）  ※色クラスタリング（区分 B）は未実装
+ *   [済] 3. 線下補完（領域の成長）
+ *   [済] 4. パーツ統合・ノイズ除去
+ *   [済] 5. パーツのレイヤー化（1 色ベタ塗り）
+ * 2〜4 は segment.ts で一括して行う（順序の理由は segment.ts の冒頭コメント参照）。
  */
+import { buildParts } from "./layers";
 import { extractLineart } from "./lineart";
+import { segment } from "./segment";
 import type { DecomposeParams, DecomposeResult, DecomposeStage, RasterImage } from "./types";
 
 export type ProgressFn = (stage: DecomposeStage, ratio: number) => void;
@@ -42,8 +44,8 @@ export function decompose(
   };
 
   const lineart = run("lineart", () => extractLineart(image, params.lineart));
-  // TODO(Phase 0): 領域分割・統合・線下補完・レイヤー化を実装する
-  const parts = run("segment", () => []);
+  const seg = run("segment", () => segment(lineart, image, params.segment));
+  const { parts, resolvedFill } = run("layers", () => buildParts(seg, params.segment.fill));
 
-  return { lineart, parts, timings };
+  return { lineart, parts, resolvedFill, timings };
 }
