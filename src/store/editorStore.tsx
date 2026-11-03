@@ -14,7 +14,8 @@ export interface EditorState {
   selectedIds: string[];
 }
 
-export type NodePatch = Partial<Pick<LayerNode, "name" | "visible" | "opacity" | "blendMode" | "clipping" | "locked">>;
+/** レイヤー共通の属性と、フォルダの開閉 */
+export type NodePatch = Partial<Pick<LayerNode, "name" | "visible" | "opacity" | "blendMode" | "clipping" | "locked">> & { expanded?: boolean };
 
 export type EditorAction =
   | { type: "open"; doc: LayerDocument }

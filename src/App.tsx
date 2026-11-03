@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { findNode } from "./core/document";
+import { ImagePlus, Layers, LoaderCircle, Redo2, Undo2, Upload, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { findNode, listRasterLayers } from "./core/document";
 import { canRedo, canUndo } from "./core/history";
 import { runDecompose, type DecomposeJob } from "./decompose/client";
 import { DEFAULT_DECOMPOSE_PARAMS, type DecomposeParams, type DecomposeStage } from "./decompose/types";
@@ -8,47 +9,52 @@ import { importImageFile, type ImportedImage } from "./io/importImage";
 import { buildDocumentFromImport } from "./store/buildFromImport";
 import { useEditor } from "./store/editorStore";
 import { mergeSelected } from "./store/partActions";
-import { CanvasView, type CanvasTool } from "./ui/CanvasView";
+import { CanvasView, type CanvasTool, type MessageKind } from "./ui/CanvasView";
+import { ContextBar, StatusBar, Toasts, ToolRail, ZoomControl, type Toast } from "./ui/Chrome";
 import { DecomposePanel } from "./ui/DecomposePanel";
 import { LayerPanel } from "./ui/LayerPanel";
+import { centerAt, fitView, nextPreset, rotateTo, rotationDegrees, zoomTo, type Pt, type ViewTransform } from "./ui/viewport";
 
 const STAGE_LABEL: Record<DecomposeStage, string> = {
-  lineart: "線画を抽出中",
-  segment: "領域を分割中",
-  merge: "パーツを統合中",
-  underfill: "線の下を補完中",
-  layers: "レイヤーを生成中",
+  lineart: "線画を抽出しています",
+  segment: "領域を分割しています",
+  merge: "パーツを統合しています",
+  underfill: "線の下を補完しています",
+  layers: "レイヤーを生成しています",
 };
 
 const FILL_LABEL = { source: "元画像の色", palette: "自動配色", white: "白" } as const;
+const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", h: "hand" };
 
 type Busy = { label: string; job?: DecomposeJob } | null;
+
+const isTyping = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName));
 
 export function App() {
   const { state, dispatch, bitmaps } = useEditor();
   const [busy, setBusy] = useState<Busy>(null);
-  const [messages, setMessages] = useState<string[]>([]);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [tool, setTool] = useState<CanvasTool>("select");
   const [multiSelect, setMultiSelect] = useState(false);
+  const [view, setView] = useState<ViewTransform | null>(null);
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const [panelOpen, setPanelOpen] = useState(false); // 狭い画面でのボトムシート
+  const cursorRef = useRef<HTMLSpanElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const h = state.history;
-  const showMessage = useCallback((m: string) => setMessages([m]), []);
+  const doc = h?.present;
 
-  // 結合できるのは選択中のパーツが 2 つ以上のとき
-  const selectedPartCount = h
-    ? state.selectedIds.filter((id) => {
-        const n = findNode(h.present.root, id);
-        return n?.kind === "raster" && n.role === "part";
-      }).length
-    : 0;
-  const merge = () => {
-    if (!h) return;
-    const r = mergeSelected(h.present, bitmaps, state.selectedIds);
-    if (r.ok) dispatch(r.action);
-    showMessage(r.ok ? r.message : r.reason);
-  };
+  // ---------------------------------------------------------------- 通知
+  const nextToastId = useRef(1);
+  const showMessage = useCallback((text: string, kind: MessageKind = "info") => {
+    const id = nextToastId.current++;
+    setToasts((ts) => [...ts.slice(-2), { id, text, kind }]);
+    window.setTimeout(() => setToasts((ts) => ts.filter((t) => t.id !== id)), kind === "error" ? 6000 : 3500);
+  }, []);
 
-  /** 自動分解を実行し、結果を新しいドキュメントとして開く */
+  // ---------------------------------------------------------------- 読み込み・分解
   const decomposeAndOpen = useCallback(
     async (imported: ImportedImage, params: DecomposeParams) => {
       const job = runDecompose(
@@ -61,72 +67,125 @@ export function App() {
       bitmaps.clear();
       dispatch({ type: "open", doc: buildDocumentFromImport(imported, result, params, bitmaps) });
       const total = Object.values(result.timings).reduce((a, b) => a + b, 0);
-      return `パーツ ${result.parts.length} 個に分解しました（塗り: ${FILL_LABEL[result.resolvedFill]}、処理 ${(total / 1000).toFixed(1)} 秒）。`;
+      return `パーツ ${result.parts.length} 個に分解しました（塗り: ${FILL_LABEL[result.resolvedFill]}・${(total / 1000).toFixed(1)} 秒）`;
     },
     [bitmaps, dispatch],
   );
 
   const openFile = useCallback(
     async (file: File) => {
-      setMessages([]);
-      setBusy({ label: "画像を読み込み中" });
+      setBusy({ label: "画像を読み込んでいます" });
       try {
         const imported = await importImageFile(file);
         const summary = await decomposeAndOpen(imported, DEFAULT_DECOMPOSE_PARAMS);
-        setMessages([...imported.warnings, summary]);
+        imported.warnings.forEach((w) => showMessage(w));
+        showMessage(summary);
       } catch (e) {
-        setMessages([e instanceof Error ? e.message : String(e)]);
+        showMessage(e instanceof Error ? e.message : String(e), "error");
       } finally {
         setBusy(null);
       }
     },
-    [decomposeAndOpen],
+    [decomposeAndOpen, showMessage],
   );
 
-  /** 現在のドキュメントの元画像を、新しいパラメータで分解し直す */
   const redecompose = useCallback(
     async (params: DecomposeParams) => {
-      const doc = h?.present;
       const src = doc?.source;
       const image = src && bitmaps.get(src.bitmapId);
-      if (!doc || !src || !image) return;
+      if (!h || !src || !image) return;
       if (canUndo(h) && !window.confirm("再分解すると、現在のレイヤーへの変更と取り消し履歴は失われます。続けますか？")) return;
-      setMessages([]);
       try {
         const summary = await decomposeAndOpen(
           { format: src.format, fileName: src.fileName, image, originalWidth: src.originalWidth, originalHeight: src.originalHeight, warnings: [] },
           params,
         );
-        setMessages([summary]);
+        showMessage(summary);
       } catch (e) {
-        setMessages([e instanceof Error ? e.message : String(e)]);
+        showMessage(e instanceof Error ? e.message : String(e), "error");
       } finally {
         setBusy(null);
       }
     },
-    [h, bitmaps, decomposeAndOpen],
+    [h, doc, bitmaps, decomposeAndOpen, showMessage],
   );
 
-  // キーボードショートカット: Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y, Esc（選択解除）
+  // ---------------------------------------------------------------- 表示（ズーム・回転）
+  const center = { x: viewport.w / 2, y: viewport.h / 2 };
+  const zoomStep = useCallback(
+    (dir: 1 | -1) => setView((v) => (v ? zoomTo(v, nextPreset(v.scale, dir), { x: viewport.w / 2, y: viewport.h / 2 }) : v)),
+    [viewport],
+  );
+  const fit = useCallback(() => {
+    if (doc) setView((v) => fitView(doc.width, doc.height, viewport.w, viewport.h, v?.rotation ?? 0));
+  }, [doc, viewport]);
+  const setScale = useCallback(
+    (s: number) => {
+      if (doc) setView((v) => centerAt(doc.width, doc.height, viewport.w, viewport.h, s, v?.rotation ?? 0));
+    },
+    [doc, viewport],
+  );
+  const resetRotation = () => setView((v) => (v ? rotateTo(v, 0, center) : v));
+  const onViewportSize = useCallback((w: number, hh: number) => setViewport({ w, h: hh }), []);
+  const onCursor = useCallback((p: Pt | null) => {
+    const el = cursorRef.current;
+    if (el) el.textContent = p ? `X ${Math.round(p.x)}  Y ${Math.round(p.y)}` : "";
+  }, []);
+
+  // ---------------------------------------------------------------- パーツ操作
+  const selectedPartCount = doc
+    ? state.selectedIds.filter((id) => {
+        const n = findNode(doc.root, id);
+        return n?.kind === "raster" && n.role === "part";
+      }).length
+    : 0;
+  const partCount = doc ? listRasterLayers(doc.root).filter((l) => l.role === "part").length : 0;
+  const merge = () => {
+    if (!doc) return;
+    const r = mergeSelected(doc, bitmaps, state.selectedIds);
+    if (r.ok) dispatch(r.action);
+    showMessage(r.ok ? r.message : r.reason, r.ok ? "info" : "error");
+  };
+
+  // ---------------------------------------------------------------- キーボード
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (isTyping(e.target)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
       if (e.key === "Escape") {
         dispatch({ type: "select", id: null });
-        return;
-      }
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const k = e.key.toLowerCase();
-      if (k === "z") {
+      } else if (mod && k === "z") {
         e.preventDefault();
         dispatch({ type: e.shiftKey ? "redo" : "undo" });
-      } else if (k === "y") {
+      } else if (mod && k === "y") {
         e.preventDefault();
         dispatch({ type: "redo" });
+      } else if (mod && (e.key === "+" || e.key === "=" || e.key === ";")) {
+        // ";" は日本語配列の「+」キー（Shift なし）
+        e.preventDefault();
+        zoomStep(1);
+      } else if (mod && (e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        zoomStep(-1);
+      } else if (mod && e.key === "0") {
+        e.preventDefault();
+        fit();
+      } else if (mod && e.key === "1") {
+        e.preventDefault();
+        setScale(1);
+      } else if (mod && k === "o") {
+        e.preventDefault();
+        fileRef.current?.click();
+      } else if (!mod && !e.altKey && TOOL_KEYS[k]) {
+        setTool(TOOL_KEYS[k]!);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dispatch]);
+  }, [dispatch, zoomStep, fit, setScale]);
+
+  const rotationDeg = view ? rotationDegrees(view) : 0;
 
   return (
     <div
@@ -135,7 +194,9 @@ export function App() {
         e.preventDefault();
         setDragOver(true);
       }}
-      onDragLeave={() => setDragOver(false)}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragOver(false);
+      }}
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
@@ -143,83 +204,163 @@ export function App() {
         if (f) void openFile(f);
       }}
     >
-      <header className="toolbar">
-        <strong className="brand">layer-draw</strong>
-        <label className="button primary">
-          画像を開く
-          <input
-            type="file"
-            accept={ACCEPT_ATTR}
-            hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) void openFile(f);
-            }}
-          />
-        </label>
-        <button disabled={!h || !canUndo(h)} onClick={() => dispatch({ type: "undo" })}>
-          取り消し
-        </button>
-        <button disabled={!h || !canRedo(h)} onClick={() => dispatch({ type: "redo" })}>
-          やり直し
-        </button>
-        {h && (
-          <div className="tool-group" role="group" aria-label="ツール">
-            <button aria-pressed={tool === "select"} className={tool === "select" ? "active" : ""} onClick={() => setTool("select")}>
-              選択
+      <input
+        ref={fileRef}
+        type="file"
+        accept={ACCEPT_ATTR}
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f) void openFile(f);
+        }}
+      />
+
+      <header className="app-bar">
+        <div className="app-bar-group">
+          <span className="brand" aria-label="layer-draw">
+            <span className="brand-mark" aria-hidden>
+              <Layers size={16} />
+            </span>
+            <span className="brand-name">layer-draw</span>
+          </span>
+          <button className="btn" onClick={() => fileRef.current?.click()} title="画像を開く (Ctrl+O)">
+            <ImagePlus size={16} />
+            <span className="btn-label">開く</span>
+          </button>
+          <span className="divider" aria-hidden />
+          <button className="icon-btn" disabled={!h || !canUndo(h)} onClick={() => dispatch({ type: "undo" })} aria-label="取り消し" title="取り消し (Ctrl+Z)">
+            <Undo2 size={17} />
+          </button>
+          <button className="icon-btn" disabled={!h || !canRedo(h)} onClick={() => dispatch({ type: "redo" })} aria-label="やり直し" title="やり直し (Ctrl+Shift+Z)">
+            <Redo2 size={17} />
+          </button>
+        </div>
+        <div className="doc-title" title={doc?.name}>
+          {doc ? (
+            <>
+              <span className="doc-name">{doc.name}</span>
+              <span className="doc-sub">{doc.source?.format.toUpperCase()}</span>
+            </>
+          ) : null}
+        </div>
+        <div className="app-bar-group end">
+          {doc && view && (
+            <ZoomControl
+              scale={view.scale}
+              rotationDeg={rotationDeg}
+              onZoomIn={() => zoomStep(1)}
+              onZoomOut={() => zoomStep(-1)}
+              onFit={fit}
+              onActual={() => setScale(1)}
+              onSetScale={setScale}
+              onResetRotation={resetRotation}
+            />
+          )}
+          {doc && (
+            <button className={`icon-btn panel-toggle${panelOpen ? " active" : ""}`} onClick={() => setPanelOpen((v) => !v)} aria-label="レイヤーパネル" aria-pressed={panelOpen}>
+              <Layers size={18} />
             </button>
-            <button aria-pressed={tool === "split"} className={tool === "split" ? "active" : ""} onClick={() => setTool("split")}>
-              分割
-            </button>
-            {tool === "select" && (
-              <button aria-pressed={multiSelect} className={multiSelect ? "active" : ""} onClick={() => setMultiSelect((v) => !v)}>
-                複数選択
-              </button>
-            )}
-            <button disabled={selectedPartCount < 2} onClick={merge}>
-              結合{selectedPartCount >= 2 ? `（${selectedPartCount}）` : ""}
-            </button>
-          </div>
-        )}
-        {h && <span className="doc-info">{h.present.name} — {h.present.width}×{h.present.height}</span>}
+          )}
+        </div>
       </header>
 
-      {messages.length > 0 && (
-        <div className="messages" role="status">
-          {messages.map((m, i) => (
-            <p key={i}>{m}</p>
-          ))}
-        </div>
+      {doc && (
+        <ContextBar
+          tool={tool}
+          multiSelect={multiSelect}
+          onMultiSelect={setMultiSelect}
+          selectedPartCount={selectedPartCount}
+          onMerge={merge}
+          onClearSelection={() => dispatch({ type: "select", id: null })}
+        />
       )}
 
-      <main className="workspace">
-        {h ? (
-          <>
-            <CanvasView doc={h.present} tool={tool} multiSelect={multiSelect} onMessage={showMessage} />
-            <aside className="side-panel">
-              {h.present.source && (
-                <DecomposePanel key={h.present.id} initial={h.present.source.params} onRun={(p) => void redecompose(p)} disabled={!!busy} />
-              )}
-              <LayerPanel doc={h.present} />
-            </aside>
-          </>
-        ) : (
-          <div className="empty">
-            <p>PNG / JPEG / SVG をドロップ、または「画像を開く」から読み込んでください。</p>
-            <p className="hint">読み込んだ画像は線画レイヤーとパーツレイヤーに自動で分解されます。</p>
-          </div>
+      <div className="main">
+        {doc && <ToolRail tool={tool} onTool={setTool} />}
+        <main className="workspace">
+          {doc ? (
+            <CanvasView
+              doc={doc}
+              tool={tool}
+              multiSelect={multiSelect}
+              view={view}
+              setView={setView}
+              onViewportSize={onViewportSize}
+              onMessage={showMessage}
+              onCursor={onCursor}
+            />
+          ) : (
+            <EmptyState onOpen={() => fileRef.current?.click()} />
+          )}
+        </main>
+        {doc && (
+          <aside className={`side-panel${panelOpen ? " open" : ""}`} aria-label="パネル">
+            <div className="sheet-handle">
+              <span>パネル</span>
+              <button className="icon-btn sm" onClick={() => setPanelOpen(false)} aria-label="パネルを閉じる">
+                <X size={16} />
+              </button>
+            </div>
+            {doc.source && <DecomposePanel key={doc.id} initial={doc.source.params} onRun={(p) => void redecompose(p)} disabled={!!busy} />}
+            <LayerPanel doc={doc} />
+          </aside>
         )}
-      </main>
+      </div>
+
+      {/* 表示変換が決まる前から描画して、ビューポートの大きさを確定させる（画面に合わせる計算がずれないように） */}
+      {doc && (
+        <StatusBar
+          scale={view?.scale ?? 1}
+          rotationDeg={rotationDeg}
+          docSize={`${doc.width} × ${doc.height} px`}
+          cursorRef={cursorRef}
+          partCount={partCount}
+          selectedCount={state.selectedIds.length}
+          onResetRotation={resetRotation}
+        />
+      )}
+
+      <Toasts toasts={toasts} onDismiss={(id) => setToasts((ts) => ts.filter((t) => t.id !== id))} />
+
+      {dragOver && (
+        <div className="drop-overlay" aria-hidden>
+          <Upload size={28} />
+          <span>ドロップして開く</span>
+        </div>
+      )}
 
       {busy && (
-        <div className="overlay" role="alertdialog" aria-live="polite">
-          <div className="dialog">
-            <p>{busy.label}…</p>
-            {busy.job && <button onClick={() => busy.job?.cancel()}>キャンセル</button>}
+        <div className="modal-backdrop" role="alertdialog" aria-live="polite" aria-label="処理中">
+          <div className="modal">
+            <LoaderCircle size={22} className="spin" />
+            <span>{busy.label}…</span>
+            {busy.job && (
+              <button className="btn ghost" onClick={() => busy.job?.cancel()}>
+                キャンセル
+              </button>
+            )}
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function EmptyState({ onOpen }: { onOpen: () => void }) {
+  return (
+    <div className="empty-state">
+      <div className="drop-card">
+        <span className="drop-icon">
+          <ImagePlus size={28} />
+        </span>
+        <h1>画像を読み込んで始める</h1>
+        <p>線画とパーツのレイヤーに自動で分解します。</p>
+        <button className="btn primary lg" onClick={onOpen}>
+          画像を開く
+        </button>
+        <p className="muted">またはここにドラッグ＆ドロップ ・ PNG / JPEG / SVG</p>
+      </div>
     </div>
   );
 }

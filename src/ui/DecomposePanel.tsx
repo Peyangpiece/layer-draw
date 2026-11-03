@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { ChevronRight, SlidersHorizontal } from "lucide-react";
+import { memo, useState } from "react";
 import type { DecomposeParams, FillMode, LineartMethod } from "../decompose/types";
 
 /** 自動分解パラメータの調整と再分解（仕様書 UC-1 手順 4, 6.2 再分解） */
-export function DecomposePanel({
+export const DecomposePanel = memo(function DecomposePanel({
   initial,
   onRun,
   disabled,
@@ -16,8 +17,12 @@ export function DecomposePanel({
   const setS = (patch: Partial<DecomposeParams["segment"]>) => setP({ ...p, segment: { ...p.segment, ...patch } });
 
   return (
-    <details className="decompose-panel">
-      <summary>分解の設定</summary>
+    <details className="panel decompose-panel">
+      <summary className="panel-header">
+        <ChevronRight size={14} className="disclosure" />
+        <SlidersHorizontal size={14} />
+        <h2>自動分解の設定</h2>
+      </summary>
       <div className="fields">
         <label>
           線画抽出
@@ -47,20 +52,28 @@ export function DecomposePanel({
           <input type="checkbox" checked={p.segment.borderAsBackground} onChange={(e) => setS({ borderAsBackground: e.target.checked })} />
           画像の端に接する領域は背景にする
         </label>
-        <button className="primary" disabled={disabled} onClick={() => onRun(p)}>
-          この設定で再分解
-        </button>
+        <div className="field-actions">
+          <button className="btn ghost" onClick={() => setP(initial)} disabled={disabled}>
+            元に戻す
+          </button>
+          <button className="btn primary" disabled={disabled} onClick={() => onRun(p)}>
+            再分解
+          </button>
+        </div>
       </div>
     </details>
   );
-}
+});
 
 function Range(props: { label: string; unit: string; min: number; max: number; step: number; value: number; onChange: (v: number) => void; hint?: string }) {
   return (
-    <label>
-      <span>
-        {props.label}: {props.value}
-        {props.unit}
+    <label className="range-field">
+      <span className="field-head">
+        <span>{props.label}</span>
+        <span className="prop-value">
+          {props.value}
+          {props.unit}
+        </span>
       </span>
       <input type="range" min={props.min} max={props.max} step={props.step} value={props.value} onChange={(e) => props.onChange(Number(e.target.value))} />
       {props.hint && <small className="hint">{props.hint}</small>}
