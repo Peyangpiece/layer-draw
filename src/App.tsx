@@ -169,6 +169,16 @@ export function App() {
     showMessage(r.ok ? r.message : r.reason, r.ok ? "info" : "error");
   };
 
+  // ---------------------------------------------------------------- ファイルから起動
+  // インストールしたアプリで画像を「このアプリで開く」と、launchQueue 経由でファイルが渡される（Chrome / Edge）
+  useEffect(() => {
+    const lq = (window as unknown as { launchQueue?: { setConsumer(cb: (p: { files?: FileSystemFileHandle[] }) => void): void } }).launchQueue;
+    lq?.setConsumer(async (params) => {
+      const handle = params.files?.[0];
+      if (handle) void openFile(await handle.getFile());
+    });
+  }, [openFile]);
+
   // ---------------------------------------------------------------- キーボード
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

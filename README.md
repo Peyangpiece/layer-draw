@@ -5,6 +5,29 @@
 - 仕様書: [docs/SPEC.md](docs/SPEC.md)
 - 対応入力形式: PNG / JPEG / SVG
 
+## Mac で使う（Dock に置く）
+
+公開先: https://peyangpiece.github.io/layer-draw/ （GitHub Pages。下の「公開の準備」が済んでから使えます）
+
+インストールしたアプリは独立したウィンドウで開き、一度開いた後はオフラインでも使えます。画像はすべて端末内で処理され、どこにも送信されません。
+
+**Safari（macOS Sonoma 14 以降）**
+
+1. Safari で上の URL を開く
+2. メニューバーの「ファイル」→「Dock に追加…」→「追加」
+
+**Chrome / Edge**
+
+1. 上の URL を開く
+2. アドレスバー右端のインストールのアイコン、またはメニューの「キャスト、保存、共有」→「ページをアプリとしてインストール…」（メニュー名はブラウザのバージョンにより異なります）
+3. 起動中に Dock のアイコンを右クリック →「オプション」→「Dock に追加」
+
+更新は自動です。オンラインで起動すると最新版になります。
+
+### 公開の準備（初回のみ）
+
+リポジトリの Settings → Pages → Build and deployment → Source を「GitHub Actions」にします。その後、既定ブランチに push するたびに、テスト・ビルドして公開します（`.github/workflows/pages.yml`）。
+
 ## 開発
 
 Node.js 22 以上を想定しています。

@@ -6,6 +6,7 @@
 - 更新: v0.4（2026-11-03）パーツのタップ選択・分割・結合を実装（6.2.1 節）
 - 更新: v0.5（2026-11-03）キャンバスの拡大・縮小・回転・移動を実装し、画面構成を刷新（7 章）
 - 更新: v0.6（2026-11-04）パーツ移動ブラシを実装（6.2.2 節）
+- 更新: v0.7（2026-11-04）インストール可能な PWA にし、GitHub Pages で公開（10.2 節）
 - ステータス: ドラフト
 
 ---
@@ -563,6 +564,21 @@ Vite + React + TypeScript。ディレクトリと責務:
 | 描画ツール、保存、PWA 化 | 未実装 |
 
 ---
+
+### 10.2 配布（v0.7 実装済み）
+
+- **形態**: インストール可能な PWA（Web App Manifest + Service Worker）。Mac では Safari の「Dock に追加」（macOS Sonoma 14 以降）、Chrome / Edge の「アプリとしてインストール」で Dock に置ける
+- **公開先**: GitHub Pages（`https://peyangpiece.github.io/layer-draw/`）。既定ブランチへの push で GitHub Actions がテスト・ビルド・公開する（`.github/workflows/pages.yml`）。初回のみリポジトリ設定で Pages の Source を「GitHub Actions」にする
+- **パス**: ビルドは相対パス（`base: "./"`）。サブパスや claude.ai の Artifact でもそのまま動く
+- **オフライン**: Service Worker はビルド時に生成する（`build/serviceWorkerPlugin.ts`）。出力の全ファイルを事前キャッシュし、キャッシュ名に内容のハッシュを含める
+  - ページはネットワーク優先（オンラインなら常に最新、オフラインならキャッシュ）、ハッシュ付きの資源はキャッシュ優先
+  - 各版は自分のキャッシュだけを参照する（`caches.match()` は全キャッシュを作成順に探すため、更新の切り替え中に古い版を返す）
+  - 生成した sw.js の構文はビルド時に検査する（壊れていると登録に失敗し、オフライン対応が黙って無効になるため）
+  - Service Worker を使えない環境（Artifact など）では登録を諦め、オフライン対応なしで動く
+- **ファイルから起動**: マニフェストの `file_handlers` で PNG / JPEG / SVG を受け付け、`launchQueue` で受け取って開く（Chrome / Edge のみ）
+- **アイコン**: macOS のアイコン格子に合わせた角丸版（`any`）と、全面を塗った版（`maskable`、`apple-touch-icon`）
+- **確認済み（Chromium）**: インストール可能性の検査でエラーなし、Service Worker の制御、オフライン起動とオフラインでの自動分解、更新時のキャッシュ入れ替え
+- **未確認**: Safari（WebKit）での動作と「Dock に追加」の見た目。この開発環境に WebKit が無いため、Mac の実機で確認する
 
 ## 11. 未決事項（要判断）
 

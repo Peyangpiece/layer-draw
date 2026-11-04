@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- 全面を塗る版（maskable / apple-touch-icon）。図柄は中央 80% の安全領域に収める -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4c8dff"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <g transform="translate(512 512) scale(0.86) translate(-512 -440)" stroke-linejoin="round">
+    <path d="M512 636 L262 520 L512 404 L762 520 Z" fill="#ffffff" fill-opacity="0.38"/>
+    <path d="M512 556 L262 440 L512 324 L762 440 Z" fill="#ffffff" fill-opacity="0.62"/>
+    <path d="M512 476 L262 360 L512 244 L762 360 Z" fill="#ffffff"/>
+    <path d="M512 476 L262 360 L512 244 L762 360 Z" fill="none" stroke="#1d2026" stroke-opacity="0.85" stroke-width="18"/>
+    <path d="M512 452 L322 364 L512 276 L702 364 Z" fill="#ffd166" fill-opacity="0.9"/>
+  </g>
+</svg>
