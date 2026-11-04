@@ -90,12 +90,14 @@ export function App() {
     [decomposeAndOpen, showMessage],
   );
 
-  const redecompose = useCallback(
+  // 確認ダイアログ。window.confirm は埋め込み先（サンドボックス化された iframe）で無視されることがあるため、ページ内に描く
+  const [confirmReq, setConfirmReq] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
+
+  const runRedecompose = useCallback(
     async (params: DecomposeParams) => {
       const src = doc?.source;
       const image = src && bitmaps.get(src.bitmapId);
-      if (!h || !src || !image) return;
-      if (canUndo(h) && !window.confirm("再分解すると、現在のレイヤーへの変更と取り消し履歴は失われます。続けますか？")) return;
+      if (!src || !image) return;
       try {
         const summary = await decomposeAndOpen(
           { format: src.format, fileName: src.fileName, image, originalWidth: src.originalWidth, originalHeight: src.originalHeight, warnings: [] },
@@ -108,7 +110,23 @@ export function App() {
         setBusy(null);
       }
     },
-    [h, doc, bitmaps, decomposeAndOpen, showMessage],
+    [doc, bitmaps, decomposeAndOpen, showMessage],
+  );
+
+  const redecompose = useCallback(
+    (params: DecomposeParams) => {
+      if (h && canUndo(h)) {
+        setConfirmReq({
+          title: "再分解しますか？",
+          message: "現在のレイヤーへの変更と、取り消しの履歴は失われます。",
+          confirmLabel: "再分解する",
+          onConfirm: () => void runRedecompose(params),
+        });
+      } else {
+        void runRedecompose(params);
+      }
+    },
+    [h, runRedecompose],
   );
 
   // ---------------------------------------------------------------- 表示（ズーム・回転）
@@ -312,7 +330,7 @@ export function App() {
                 <X size={16} />
               </button>
             </div>
-            {doc.source && <DecomposePanel key={doc.id} initial={doc.source.params} onRun={(p) => void redecompose(p)} disabled={!!busy} />}
+            {doc.source && <DecomposePanel key={doc.id} initial={doc.source.params} onRun={redecompose} disabled={!!busy} />}
             <LayerPanel doc={doc} />
           </aside>
         )}
@@ -328,6 +346,18 @@ export function App() {
           partCount={partCount}
           selectedCount={state.selectedIds.length}
           onResetRotation={resetRotation}
+        />
+      )}
+
+      {confirmReq && (
+        <ConfirmDialog
+          {...confirmReq}
+          onCancel={() => setConfirmReq(null)}
+          onConfirm={() => {
+            const fn = confirmReq.onConfirm;
+            setConfirmReq(null);
+            fn();
+          }}
         />
       )}
 
@@ -353,6 +383,49 @@ export function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const okRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    okRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onCancel]);
+  return (
+    <div className="modal-backdrop" onPointerDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <div className="modal dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-msg">
+        <h2 id="confirm-title">{title}</h2>
+        <p id="confirm-msg">{message}</p>
+        <div className="dialog-actions">
+          <button className="btn ghost" onClick={onCancel}>
+            キャンセル
+          </button>
+          <button ref={okRef} className="btn primary" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
