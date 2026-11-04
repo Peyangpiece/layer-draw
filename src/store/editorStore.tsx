@@ -6,7 +6,7 @@ import { createContext, useContext, useMemo, useReducer, type Dispatch, type Rea
 import { BitmapStore } from "../core/bitmapStore";
 import { findNode, moveNode, removeNode, replaceNode, updateNode } from "../core/document";
 import { commit, createHistory, push, redo, replace, undo, type History } from "../core/history";
-import type { LayerDocument, LayerNode } from "../core/types";
+import type { LayerDocument, LayerNode, Rect } from "../core/types";
 
 export interface EditorState {
   history: History<LayerDocument> | null;
@@ -25,6 +25,8 @@ export type EditorAction =
   | { type: "replaceNode"; id: string; nodes: LayerNode[]; select?: string[] }
   /** 複数ノードを削除し、merged を insertAt の位置に置く（パーツ結合） */
   | { type: "mergeNodes"; ids: string[]; merged: LayerNode; insertAt: string }
+  /** 複数のラスタレイヤーのビットマップと範囲を差し替え、remove のレイヤーを削除する（パーツ移動ブラシ）。1 ステップの履歴になる */
+  | { type: "updateLayers"; updates: { id: string; bitmapId: string; bounds: Rect }[]; remove: string[]; select?: string[] }
   /** commit=false のときは履歴に積まない（スライダーのドラッグ中など） */
   | { type: "patch"; id: string; patch: NodePatch; commit?: boolean }
   | { type: "commit" }
@@ -55,6 +57,15 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         history: push(h, replaceNode(h.present, action.id, action.nodes)),
         selectedIds: action.select ?? state.selectedIds.filter((i) => i !== action.id),
       };
+    case "updateLayers": {
+      let doc = h.present;
+      for (const u of action.updates) doc = updateNode(doc, u.id, { bitmapId: u.bitmapId, bounds: u.bounds });
+      for (const id of action.remove) doc = removeNode(doc, id);
+      return {
+        history: push(h, doc),
+        selectedIds: action.select ?? state.selectedIds.filter((i) => !action.remove.includes(i)),
+      };
+    }
     case "mergeNodes": {
       // insertAt の位置を merged で置き換え、残りを削除する
       let doc = replaceNode(h.present, action.insertAt, [action.merged]);

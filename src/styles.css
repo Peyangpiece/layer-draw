@@ -134,7 +134,9 @@ button:disabled { opacity: 0.38; cursor: default; }
   padding: 0 12px; background: var(--bg-bar); border-bottom: 1px solid var(--border); overflow-x: auto;
   scrollbar-width: none;
 }
-.context-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text); }
+.context-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text); white-space: nowrap; }
+/* 項目は縮めずに並べ、入りきらなければバーを横スクロールさせる（縮めると文字が縦に折れる） */
+.context-bar > * { flex-shrink: 0; }
 .context-hint { color: var(--text-faint); margin-left: auto; white-space: nowrap; font-size: 12px; }
 .chip {
   height: 26px; padding: 0 10px; border-radius: 999px; border-color: var(--border);
@@ -142,6 +144,9 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .chip:hover:not(:disabled) { background: var(--bg-hover); }
 .chip.active { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); }
+.context-field { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.context-field input[type="range"] { width: 140px; }
+.target-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-weight: 500; }
 .chip.ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
 
 /* ツールレール */
@@ -164,6 +169,14 @@ button:disabled { opacity: 0.38; cursor: default; }
   background: repeating-conic-gradient(var(--checker-a) 0 25%, var(--checker-b) 0 50%) 0 0 / 16px 16px;
 }
 .stage-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* 移動ブラシのなぞり跡。重なっても濃くならないよう、不透明に描いてキャンバスごと半透明にする */
+.brush-preview { opacity: 0.55; pointer-events: none; }
+/* 移動ブラシの円カーソル（画面座標）。明暗どちらの背景でも見えるよう白黒の二重線 */
+.brush-cursor {
+  display: none; position: absolute; left: 0; top: 0; border-radius: 50%; pointer-events: none;
+  border: 1px solid rgb(0 0 0 / 0.75); box-shadow: 0 0 0 1px rgb(255 255 255 / 0.85), inset 0 0 0 1px rgb(255 255 255 / 0.85);
+  will-change: transform;
+}
 
 /* 空の状態 */
 .empty-state { flex: 1; display: grid; place-items: center; padding: 24px; background: var(--pasteboard); }
@@ -327,6 +340,9 @@ kbd { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 @media (max-width: 720px) {
   :root { --bar-h: 48px; }
   .brand-name, .btn-label, .context-hint, .doc-sub { display: none; }
+  /* ツール名は下部のツールバーに出ているので、オプションバーでは省く */
+  .context-title, .context-title + .divider { display: none; }
+  .context-field input[type="range"] { width: 96px; }
   .brand { margin-right: 2px; }
   .app-bar { grid-template-columns: auto 1fr auto; padding: 0 4px; }
   .doc-name { max-width: 100%; font-size: 12px; }

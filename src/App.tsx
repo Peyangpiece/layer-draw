@@ -10,7 +10,7 @@ import { buildDocumentFromImport } from "./store/buildFromImport";
 import { useEditor } from "./store/editorStore";
 import { mergeSelected } from "./store/partActions";
 import { CanvasView, type CanvasTool, type MessageKind } from "./ui/CanvasView";
-import { ContextBar, StatusBar, Toasts, ToolRail, ZoomControl, type Toast } from "./ui/Chrome";
+import { ContextBar, StatusBar, stepBrushSize, Toasts, ToolRail, ZoomControl, type Toast } from "./ui/Chrome";
 import { DecomposePanel } from "./ui/DecomposePanel";
 import { LayerPanel } from "./ui/LayerPanel";
 import { centerAt, fitView, nextPreset, rotateTo, rotationDegrees, zoomTo, type Pt, type ViewTransform } from "./ui/viewport";
@@ -24,7 +24,7 @@ const STAGE_LABEL: Record<DecomposeStage, string> = {
 };
 
 const FILL_LABEL = { source: "元画像の色", palette: "自動配色", white: "白" } as const;
-const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", h: "hand" };
+const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", b: "move", h: "hand" };
 
 type Busy = { label: string; job?: DecomposeJob } | null;
 
@@ -38,6 +38,7 @@ export function App() {
   const [dragOver, setDragOver] = useState(false);
   const [tool, setTool] = useState<CanvasTool>("select");
   const [multiSelect, setMultiSelect] = useState(false);
+  const [brushSize, setBrushSize] = useState(20);
   const [view, setView] = useState<ViewTransform | null>(null);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const [panelOpen, setPanelOpen] = useState(false); // 狭い画面でのボトムシート
@@ -139,6 +140,9 @@ export function App() {
         return n?.kind === "raster" && n.role === "part";
       }).length
     : 0;
+  // 移動ブラシの移動先として表示する主選択パーツ
+  const primary = doc && state.selectedIds.length > 0 ? findNode(doc.root, state.selectedIds[state.selectedIds.length - 1]!) : undefined;
+  const moveTarget = primary?.kind === "raster" && primary.role === "part" ? { name: primary.name, color: primary.part?.fillColor } : undefined;
   const partCount = doc ? listRasterLayers(doc.root).filter((l) => l.role === "part").length : 0;
   const merge = () => {
     if (!doc) return;
@@ -177,6 +181,8 @@ export function App() {
       } else if (mod && k === "o") {
         e.preventDefault();
         fileRef.current?.click();
+      } else if (!mod && (e.key === "[" || e.key === "]")) {
+        setBrushSize((v) => stepBrushSize(v, e.key === "]" ? 1 : -1));
       } else if (!mod && !e.altKey && TOOL_KEYS[k]) {
         setTool(TOOL_KEYS[k]!);
       }
@@ -273,6 +279,9 @@ export function App() {
           selectedPartCount={selectedPartCount}
           onMerge={merge}
           onClearSelection={() => dispatch({ type: "select", id: null })}
+          brushSize={brushSize}
+          onBrushSize={setBrushSize}
+          moveTarget={moveTarget}
         />
       )}
 
@@ -284,6 +293,7 @@ export function App() {
               doc={doc}
               tool={tool}
               multiSelect={multiSelect}
+              brushSize={brushSize}
               view={view}
               setView={setView}
               onViewportSize={onViewportSize}

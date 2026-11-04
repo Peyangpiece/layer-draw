@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RasterImage } from "../decompose/types";
-import { mergeParts, opaqueArea, rasterizeStroke, splitPart } from "./partOps";
+import { cropToContent, mergeParts, movePixels, opaqueArea, rasterizeStroke, splitPart } from "./partOps";
 
 /** w×h のビットマップ。fill(x, y) が色を返した画素だけ不透明 */
 function bitmap(w: number, h: number, fill: (x: number, y: number) => [number, number, number] | null): RasterImage {
@@ -28,6 +28,20 @@ describe("rasterizeStroke", () => {
     for (let i = 0; i < 19; i++) {
       // 対角の両隣が両方とも線でないと、4 近傍で斜めにすり抜けられる
       expect(m[i * 20 + i + 1] === 1 || m[(i + 1) * 20 + i] === 1).toBe(true);
+    }
+  });
+});
+
+describe("rasterizeStroke（大きな半径）", () => {
+  it("間隔を広げても、線分から radius-1 以内の画素はすべて塗られる", () => {
+    const r = 50;
+    const rect = { x: 0, y: 0, w: 400, h: 200 };
+    const m = rasterizeStroke([{ x: 60, y: 100 }, { x: 340, y: 100 }], rect, r);
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 400; x++) {
+      const dx = x < 60 ? 60 - x : x > 340 ? x - 340 : 0;
+      const d = Math.hypot(dx, y - 100);
+      if (d <= r - 1) expect(m[y * 400 + x]).toBe(1);
+      if (d > r + 1) expect(m[y * 400 + x]).toBe(0);
     }
   });
 });
@@ -99,5 +113,63 @@ describe("mergeParts", () => {
     const filled = mergeParts([front, back], "#ff8000");
     expect(Array.from(filled.image.data.subarray((5 * 6 + 5) * 4, (5 * 6 + 5) * 4 + 4))).toEqual([255, 128, 0, 255]);
     expect(opaqueArea(filled.image)).toBe(16 + 16 - 4);
+  });
+});
+
+describe("movePixels", () => {
+  const BLUE: [number, number, number] = [30, 30, 200];
+  const a = () => ({ x: 0, y: 0, image: bitmap(10, 10, () => RED) }); // 移動先: x 0..9
+  const b = () => ({ x: 10, y: 0, image: bitmap(10, 10, () => BLUE) }); // 移動元: x 10..19
+  const maskCols = (x0: number, x1: number) => {
+    const rect = { x: 0, y: 0, w: 20, h: 10 };
+    const m = new Uint8Array(200);
+    for (let y = 0; y < 10; y++) for (let x = x0; x <= x1; x++) m[y * 20 + x] = 1;
+    return { m, rect };
+  };
+
+  it("なぞった範囲の移動元の画素が移動先に移り、面積は保存される", () => {
+    const { m, rect } = maskCols(8, 13);
+    const r = movePixels(a(), [b()], m, rect, "#ff0000");
+    expect(r.moved).toBe(4 * 10); // x 10..13
+    expect([r.target.x, r.target.image.width]).toEqual([0, 14]);
+    const src = r.sources[0]!;
+    expect(src).not.toBeNull();
+    expect([src!.x, src!.image.width]).toEqual([14, 6]); // 残りに切り詰め
+    expect(opaqueArea(r.target.image) + opaqueArea(src!.image)).toBe(200);
+    // 移した画素は移動先の色
+    expect(Array.from(r.target.image.data.subarray((5 * 14 + 12) * 4, (5 * 14 + 12) * 4 + 4))).toEqual([255, 0, 0, 255]);
+  });
+
+  it("移動元がすべて移ったら null（レイヤー削除の合図）", () => {
+    const { m, rect } = maskCols(0, 19);
+    const r = movePixels(a(), [b()], m, rect);
+    expect(r.sources[0]).toBeNull();
+    expect(opaqueArea(r.target.image)).toBe(200);
+    // fill 省略時は移動元の色のまま
+    expect(Array.from(r.target.image.data.subarray((0 * 20 + 15) * 4, (0 * 20 + 15) * 4 + 3))).toEqual(BLUE);
+  });
+
+  it("移動元に触れていなければ何も変わらない", () => {
+    const { m, rect } = maskCols(2, 6);
+    const r = movePixels(a(), [b()], m, rect);
+    expect(r.moved).toBe(0);
+    expect(r.sources[0]).toBeUndefined();
+  });
+
+  it("離れた位置の画素も移せる（移動先の外接矩形が広がる）", () => {
+    const far = { x: 30, y: 5, image: bitmap(4, 4, () => BLUE) };
+    const rect = { x: 30, y: 5, w: 4, h: 4 };
+    const r = movePixels(a(), [far], new Uint8Array(16).fill(1), rect);
+    expect([r.target.x, r.target.y, r.target.image.width, r.target.image.height]).toEqual([0, 0, 34, 10]);
+    expect(r.sources[0]).toBeNull();
+  });
+});
+
+describe("cropToContent", () => {
+  it("不透明画素の外接矩形に切り詰め、空なら null", () => {
+    const img = bitmap(10, 10, (x, y) => (x >= 3 && x < 5 && y === 7 ? RED : null));
+    const c = cropToContent({ x: 100, y: 200, image: img })!;
+    expect([c.x, c.y, c.image.width, c.image.height]).toEqual([103, 207, 2, 1]);
+    expect(cropToContent({ x: 0, y: 0, image: bitmap(3, 3, () => null) })).toBeNull();
   });
 });

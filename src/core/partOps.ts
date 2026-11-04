@@ -17,7 +17,10 @@ export interface Point {
 
 /**
  * 折れ線を、指定した矩形（ドキュメント座標）内のマスクとしてラスタライズする。
- * 各線分上を 0.5px 間隔でサンプリングし、半径 radius の円を打つ。
+ * 各線分上を max(0.5, radius/4) px 間隔でサンプリングし、半径 radius の円を打つ。
+ * 円の間隔 s による縁の凹凸は約 s²/(8·radius) px（s = radius/4 なら radius/128 px）で、
+ * 半径 128px まで 1px 未満。間隔を半径に比例させるのは、大きなブラシで 1 打あたり ~radius² の計算が
+ * 0.5px ごとに繰り返されて遅くなるのを避けるため。
  */
 export function rasterizeStroke(points: Point[], rect: { x: number; y: number; w: number; h: number }, radius: number): Uint8Array {
   const mask = new Uint8Array(rect.w * rect.h);
@@ -38,7 +41,8 @@ export function rasterizeStroke(points: Point[], rect: { x: number; y: number; w
   if (points.length === 1) stamp(points[0]!.x, points[0]!.y);
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1]!, b = points[i]!;
-    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * 2));
+    const spacing = Math.max(0.5, r / 4);
+    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / spacing));
     for (let s = 0; s <= steps; s++) stamp(a.x + ((b.x - a.x) * s) / steps, a.y + ((b.y - a.y) * s) / steps);
   }
   return mask;
@@ -228,4 +232,116 @@ export function mergeParts(partsFrontToBack: PlacedImage[], fill?: string): Plac
     }
   }
   return { x: x0, y: y0, image: { width: w, height: h, data: out } };
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface MoveResult {
+  /** 画素を受け取った後の移動先パーツ */
+  target: PlacedImage;
+  /** 移動元パーツの新しいビットマップ（sources と同じ順）。変化なしは undefined、空になったら null */
+  sources: (PlacedImage | null | undefined)[];
+  /** 移動した画素数 */
+  moved: number;
+}
+
+/**
+ * パーツ移動ブラシ（仕様書 6.2）: マスク内にある移動元パーツの画素を、移動先パーツへ移す。
+ *
+ * @param target  移動先パーツ
+ * @param sources 移動元の候補パーツ（移動先を含めないこと）
+ * @param mask    ドキュメント座標の矩形 rect 上のマスク（1 = なぞった画素）
+ * @param fill    指定すると、移した画素の RGB をこの色（#rrggbb）にする。省略時は移動元の色のまま
+ *
+ * - 移動先は、元の範囲と移した画素の範囲を合わせた外接矩形に広がる
+ * - 移動元は移した画素を透明にし、残りの外接矩形に縮める。すべて無くなったら null
+ * - 移動先にすでにある画素はそのまま（アルファは大きい方を採用）
+ */
+export function movePixels(target: PlacedImage, sources: PlacedImage[], mask: Uint8Array, rect: Rect, fill?: string): MoveResult {
+  type Moved = { x: number; y: number; r: number; g: number; b: number; a: number };
+  const moved: Moved[] = [];
+  const results: (PlacedImage | null | undefined)[] = [];
+
+  for (const src of sources) {
+    const { width: w, height: h, data } = src.image;
+    // 移動元とマスク矩形の交差範囲（ドキュメント座標）
+    const x0 = Math.max(src.x, rect.x), y0 = Math.max(src.y, rect.y);
+    const x1 = Math.min(src.x + w, rect.x + rect.w), y1 = Math.min(src.y + h, rect.y + rect.h);
+    if (x0 >= x1 || y0 >= y1) {
+      results.push(undefined);
+      continue;
+    }
+    let out: Uint8ClampedArray | null = null;
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        if (!mask[(y - rect.y) * rect.w + (x - rect.x)]) continue;
+        const i = ((y - src.y) * w + (x - src.x)) * 4;
+        if (data[i + 3] === 0) continue;
+        out ??= new Uint8ClampedArray(data);
+        moved.push({ x, y, r: data[i]!, g: data[i + 1]!, b: data[i + 2]!, a: data[i + 3]! });
+        out[i] = out[i + 1] = out[i + 2] = out[i + 3] = 0;
+      }
+    }
+    results.push(out ? cropToContent({ x: src.x, y: src.y, image: { width: w, height: h, data: out } }) : undefined);
+  }
+
+  if (moved.length === 0) return { target, sources: results, moved: 0 };
+
+  // 移動先を広げる
+  let nx0 = target.x, ny0 = target.y, nx1 = target.x + target.image.width, ny1 = target.y + target.image.height;
+  if (target.image.width === 0 || target.image.height === 0) {
+    nx0 = Infinity; ny0 = Infinity; nx1 = -Infinity; ny1 = -Infinity;
+  }
+  for (const m of moved) {
+    if (m.x < nx0) nx0 = m.x;
+    if (m.y < ny0) ny0 = m.y;
+    if (m.x + 1 > nx1) nx1 = m.x + 1;
+    if (m.y + 1 > ny1) ny1 = m.y + 1;
+  }
+  const nw = nx1 - nx0, nh = ny1 - ny0;
+  const out = new Uint8ClampedArray(nw * nh * 4);
+  const t = target.image;
+  for (let y = 0; y < t.height; y++) {
+    const srcRow = y * t.width * 4;
+    out.set(t.data.subarray(srcRow, srcRow + t.width * 4), ((target.y - ny0 + y) * nw + (target.x - nx0)) * 4);
+  }
+  const rgb = fill ? [parseInt(fill.slice(1, 3), 16), parseInt(fill.slice(3, 5), 16), parseInt(fill.slice(5, 7), 16)] : null;
+  for (const m of moved) {
+    const i = ((m.y - ny0) * nw + (m.x - nx0)) * 4;
+    if (out[i + 3]! > 0 && out[i + 3]! >= m.a) continue; // 既にある画素は残す
+    out[i] = rgb ? rgb[0]! : m.r;
+    out[i + 1] = rgb ? rgb[1]! : m.g;
+    out[i + 2] = rgb ? rgb[2]! : m.b;
+    out[i + 3] = Math.max(out[i + 3]!, m.a);
+  }
+  return { target: { x: nx0, y: ny0, image: { width: nw, height: nh, data: out } }, sources: results, moved: moved.length };
+}
+
+/** 不透明画素の外接矩形に切り詰める。不透明画素が無ければ null */
+export function cropToContent(p: PlacedImage): PlacedImage | null {
+  const { width: w, height: h, data } = p.image;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] === 0) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return null;
+  if (x0 === 0 && y0 === 0 && x1 === w - 1 && y1 === h - 1) return p;
+  const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+  const out = new Uint8ClampedArray(cw * ch * 4);
+  for (let y = 0; y < ch; y++) {
+    const s0 = ((y0 + y) * w + x0) * 4;
+    out.set(data.subarray(s0, s0 + cw * 4), y * cw * 4);
+  }
+  return { x: p.x + x0, y: p.y + y0, image: { width: cw, height: ch, data: out } };
 }

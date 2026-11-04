@@ -1,7 +1,7 @@
 /**
  * アプリの枠（ツールレール・ツールオプションバー・ズーム操作・ステータスバー・トースト）。
  */
-import { ChevronDown, Combine, Hand, Info, CircleAlert, MousePointer2, Scissors, SquareDashedMousePointer, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Brush, ChevronDown, Combine, Hand, Info, CircleAlert, MousePointer2, Scissors, SquareDashedMousePointer, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { CanvasTool, MessageKind } from "./CanvasView";
 
@@ -10,6 +10,7 @@ import type { CanvasTool, MessageKind } from "./CanvasView";
 export const TOOLS: { id: CanvasTool; label: string; key: string; icon: ReactNode; hint: string }[] = [
   { id: "select", label: "選択", key: "V", icon: <MousePointer2 size={18} />, hint: "タップでパーツを選択。Shift / Ctrl + クリックで追加選択" },
   { id: "split", label: "分割", key: "C", icon: <Scissors size={18} />, hint: "パーツを端から端まで横切るように線を引くと分割" },
+  { id: "move", label: "移動ブラシ", key: "B", icon: <Brush size={18} />, hint: "なぞった所にある隣のパーツの画素を移動先パーツへ移す。[ ] でサイズ変更" },
   { id: "hand", label: "手のひら", key: "H", icon: <Hand size={18} />, hint: "ドラッグで表示位置を移動。Space を押している間も使えます" },
 ];
 
@@ -41,6 +42,9 @@ export function ContextBar({
   selectedPartCount,
   onMerge,
   onClearSelection,
+  brushSize,
+  onBrushSize,
+  moveTarget,
 }: {
   tool: CanvasTool;
   multiSelect: boolean;
@@ -48,6 +52,10 @@ export function ContextBar({
   selectedPartCount: number;
   onMerge: () => void;
   onClearSelection: () => void;
+  brushSize: number;
+  onBrushSize: (v: number) => void;
+  /** 移動ブラシの移動先（選択中のパーツ）。未選択なら undefined */
+  moveTarget?: { name: string; color?: string };
 }) {
   const info = TOOLS.find((t) => t.id === tool)!;
   return (
@@ -72,9 +80,39 @@ export function ContextBar({
           </button>
         </>
       )}
+      {tool === "move" && (
+        <>
+          <label className="context-field" title="ブラシの直径（画像のピクセル）。[ で小さく、] で大きく">
+            <span>サイズ</span>
+            <input type="range" min={BRUSH_MIN} max={BRUSH_MAX} step={1} value={brushSize} onChange={(e) => onBrushSize(Number(e.target.value))} />
+            <span className="prop-value">{brushSize}px</span>
+          </label>
+          <span className="divider" aria-hidden />
+          <span className="context-field">
+            <span>移動先</span>
+            {moveTarget ? (
+              <span className="target-chip">
+                {moveTarget.color && <span className="swatch" style={{ background: moveTarget.color }} aria-hidden />}
+                {moveTarget.name}
+              </span>
+            ) : (
+              <span className="muted">なぞり始めたパーツ</span>
+            )}
+          </span>
+        </>
+      )}
       <span className="context-hint">{info.hint}</span>
     </div>
   );
+}
+
+export const BRUSH_MIN = 1;
+export const BRUSH_MAX = 200;
+
+/** [ ] キーでのブラシサイズ変更: サイズに応じた刻み（小さいときは細かく） */
+export function stepBrushSize(size: number, dir: 1 | -1): number {
+  const step = size < 10 ? 1 : size < 50 ? 5 : 10;
+  return Math.min(BRUSH_MAX, Math.max(BRUSH_MIN, size + dir * step));
 }
 
 // ---------------------------------------------------------------- ズーム

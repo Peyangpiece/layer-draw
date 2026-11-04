@@ -5,7 +5,7 @@
 import type { BitmapStore } from "../core/bitmapStore";
 import { displayIndex, findNode, visibleRasterLayersFrontToBack } from "../core/document";
 import { newId } from "../core/id";
-import { mergeParts, opaqueArea, rasterizeStroke, splitPart, type Point } from "../core/partOps";
+import { mergeParts, movePixels, opaqueArea, rasterizeStroke, splitPart, type Point } from "../core/partOps";
 import type { LayerDocument, RasterLayer } from "../core/types";
 import { toImageData } from "./buildFromImport";
 import type { EditorAction } from "./editorStore";
@@ -106,5 +106,73 @@ export function mergeSelected(doc: LayerDocument, bitmaps: BitmapStore, selected
     ok: true,
     action: { type: "mergeNodes", ids: layers.map((l) => l.id), merged: node, insertAt: front.id },
     message: `${layers.length} つのパーツを「${node.name}」に結合しました。`,
+  };
+}
+
+/**
+ * パーツ移動ブラシの移動先を決める: 選択中のパーツ（複数なら主選択）、無ければなぞり始めた位置の最前面のパーツ。
+ */
+export function pickMoveTarget(doc: LayerDocument, bitmaps: BitmapStore, selectedIds: string[], start: Point): RasterLayer | undefined {
+  for (let i = selectedIds.length - 1; i >= 0; i--) {
+    const n = findNode(doc.root, selectedIds[i]!);
+    if (n && n.kind === "raster" && n.role === "part") return n;
+  }
+  return hitTestPart(doc, bitmaps, start.x, start.y);
+}
+
+/**
+ * パーツ移動ブラシ（仕様書 6.2）: なぞった範囲にある他のパーツの画素を、移動先パーツへ移す。
+ * 対象は表示中・ロックされていないパーツのみ。線画・背景・元画像には触れない。
+ * 移した画素は移動先の塗り色にする。移動元が空になったらレイヤーを削除する。
+ */
+export function moveBrush(doc: LayerDocument, bitmaps: BitmapStore, target: RasterLayer, stroke: Point[], radius: number): OpResult {
+  if (target.locked) return { ok: false, reason: `移動先「${target.name}」はロックされています。` };
+  const targetImg = bitmaps.get(target.bitmapId);
+  if (!targetImg) return { ok: false, reason: "移動先のパーツの画像が見つかりません。" };
+
+  // なぞった範囲の外接矩形（ドキュメント内に制限）
+  const r = Math.max(0.5, radius);
+  const xs = stroke.map((p) => p.x), ys = stroke.map((p) => p.y);
+  const x0 = Math.max(0, Math.floor(Math.min(...xs) - r - 1)), y0 = Math.max(0, Math.floor(Math.min(...ys) - r - 1));
+  const x1 = Math.min(doc.width, Math.ceil(Math.max(...xs) + r + 2)), y1 = Math.min(doc.height, Math.ceil(Math.max(...ys) + r + 2));
+  if (x0 >= x1 || y0 >= y1) return { ok: false, reason: "画像の外をなぞっています。" };
+  const rect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  const mask = rasterizeStroke(stroke, rect, r);
+
+  // 範囲と重なる、表示中・ロックなしの他のパーツ
+  const overlaps = (l: RasterLayer) =>
+    l.bounds.x < rect.x + rect.w && l.bounds.x + l.bounds.w > rect.x && l.bounds.y < rect.y + rect.h && l.bounds.y + l.bounds.h > rect.y;
+  const sources = visibleRasterLayersFrontToBack(doc.root).filter((l) => l.role === "part" && l.id !== target.id && !l.locked && overlaps(l));
+  const srcImgs = sources.map((l) => bitmaps.get(l.bitmapId));
+  const usable = sources.filter((_, i) => srcImgs[i]);
+
+  const result = movePixels(
+    { x: target.bounds.x, y: target.bounds.y, image: targetImg },
+    usable.map((l) => ({ x: l.bounds.x, y: l.bounds.y, image: bitmaps.get(l.bitmapId)! })),
+    mask,
+    rect,
+    target.part?.fillColor,
+  );
+  if (result.moved === 0) {
+    return { ok: false, reason: `「${target.name}」へ移せる画素がありません。隣のパーツの上をなぞってください。` };
+  }
+
+  const updates: { id: string; bitmapId: string; bounds: { x: number; y: number; w: number; h: number } }[] = [];
+  const remove: string[] = [];
+  const t = result.target;
+  updates.push({ id: target.id, bitmapId: bitmaps.add(toImageData(t.image)), bounds: { x: t.x, y: t.y, w: t.image.width, h: t.image.height } });
+  const touched: string[] = [];
+  result.sources.forEach((s, i) => {
+    const layer = usable[i]!;
+    if (s === undefined) return;
+    touched.push(layer.name);
+    if (s === null) remove.push(layer.id);
+    else updates.push({ id: layer.id, bitmapId: bitmaps.add(toImageData(s.image)), bounds: { x: s.x, y: s.y, w: s.image.width, h: s.image.height } });
+  });
+  const removedNote = remove.length > 0 ? `（${remove.length} つのパーツが空になったため削除）` : "";
+  return {
+    ok: true,
+    action: { type: "updateLayers", updates, remove, select: [target.id] },
+    message: `${touched.join("・")} から「${target.name}」へ ${result.moved.toLocaleString()} px 移しました${removedNote}`,
   };
 }
