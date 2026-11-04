@@ -1,7 +1,8 @@
 /* =====================================================================
    layer-draw — デザイントークン
    既定はダーク（作業中の絵の色を邪魔しない中立的な暗いグレー）。
-   OS がライト設定のときはライトテーマ。
+   OS がライト設定のときはライトテーマ。埋め込み先（claude.ai など）が data-theme 属性で
+   明示的にテーマを指定した場合はそれに従う。
    ===================================================================== */
 :root {
   --bg-app: #1d1e21;
@@ -38,8 +39,10 @@
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", monospace;
   color-scheme: dark;
 }
+/* ライトの値。OS がライト設定のとき（埋め込み先で明示的にダークが選ばれている場合を除く）と、
+   埋め込み先で明示的にライトが選ばれたとき（data-theme="light"）に使う */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --bg-app: #eef0f3;
     --bg-bar: #ffffff;
     --bg-panel: #ffffff;
@@ -61,6 +64,28 @@
     --shadow-stage: 0 0 0 1px rgb(20 24 31 / 0.12), 0 6px 24px rgb(20 24 31 / 0.18);
     color-scheme: light;
   }
+}
+:root[data-theme="light"] {
+  --bg-app: #eef0f3;
+  --bg-bar: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-elev: #f4f5f7;
+  --bg-hover: #eceef1;
+  --bg-input: #ffffff;
+  --pasteboard: #d9dce1;
+  --border: #dde0e5;
+  --border-strong: #c6cad1;
+  --text: #1d2026;
+  --text-muted: #5f6570;
+  --text-faint: #8d939d;
+  --accent: #2f6fed;
+  --accent-hover: #255fd4;
+  --accent-weak: rgb(47 111 237 / 0.12);
+  --danger: #d93838;
+  --danger-weak: rgb(217 56 56 / 0.1);
+  --shadow-lg: 0 12px 32px rgb(20 24 31 / 0.16), 0 2px 6px rgb(20 24 31 / 0.08);
+  --shadow-stage: 0 0 0 1px rgb(20 24 31 / 0.12), 0 6px 24px rgb(20 24 31 / 0.18);
+  color-scheme: light;
 }
 
 /* ===================================================================== 基本 */
