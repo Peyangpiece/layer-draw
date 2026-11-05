@@ -1,6 +1,6 @@
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, CornerDownRight, Eye, EyeOff, Folder, Lock, LockOpen, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, CornerDownRight, Eye, EyeOff, Folder, Grid2x2, Lock, LockOpen, Plus, Trash2 } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
-import { findNode } from "../core/document";
+import { createRasterLayer, findNode, findParent, listRasterLayers } from "../core/document";
 import type { BlendMode, LayerDocument, LayerNode, RasterLayer } from "../core/types";
 import { collectBitmapIds, recolorBitmap } from "../store/buildFromImport";
 import { useEditor, type NodePatch } from "../store/editorStore";
@@ -32,9 +32,22 @@ const blendLabel = (m: BlendMode) => BLEND_LABELS.find(([v]) => v === m)?.[1] ??
  * 中央にサムネイル付きの一覧、下部に並べ替え・削除。
  */
 export const LayerPanel = memo(function LayerPanel({ doc }: { doc: LayerDocument }) {
-  const { state, dispatch } = useEditor();
+  const { state, dispatch, bitmaps } = useEditor();
   const primaryId = state.selectedIds[state.selectedIds.length - 1];
   const primary = primaryId ? findNode(doc.root, primaryId) : undefined;
+
+  /** 空のレイヤーを、選択中のレイヤーのすぐ上（同じフォルダ内）に作る。未選択なら一番上 */
+  const addLayer = () => {
+    const n = listRasterLayers(doc.root).filter((l) => l.role === "normal").length + 1;
+    const layer = createRasterLayer({ name: `レイヤー ${n}`, bitmapId: bitmaps.add(new ImageData(1, 1)), bounds: { x: 0, y: 0, w: 1, h: 1 } });
+    const parent = primary ? findParent(doc.root, primary.id) : undefined;
+    if (primary && parent) {
+      const index = parent.children.findIndex((c) => c.id === primary.id);
+      dispatch({ type: "insertNode", node: layer, parentId: parent.id, index });
+    } else {
+      dispatch({ type: "insertNode", node: layer, index: 0 });
+    }
+  };
 
   return (
     <section className="panel layer-panel" aria-label="レイヤー">
@@ -48,6 +61,9 @@ export const LayerPanel = memo(function LayerPanel({ doc }: { doc: LayerDocument
         ))}
       </ul>
       <footer className="panel-footer">
+        <button className="icon-btn" onClick={addLayer} aria-label="新規レイヤー" title="新規レイヤー（選択中のレイヤーの上に作成）">
+          <Plus size={16} />
+        </button>
         <button className="icon-btn" disabled={!primary} onClick={() => primary && dispatch({ type: "move", id: primary.id, delta: -1 })} aria-label="前面へ" title="前面へ">
           <ArrowUp size={16} />
         </button>
@@ -85,6 +101,17 @@ function LayerProps({ node }: { node: LayerNode | undefined }) {
           <button className={`icon-btn sm${node.clipping ? " active" : ""}`} aria-pressed={node.clipping} title="クリッピング" aria-label="クリッピング" onClick={() => patch({ clipping: !node.clipping })}>
             <CornerDownRight size={15} />
           </button>
+          {node.kind === "raster" && (
+            <button
+              className={`icon-btn sm${node.alphaLocked ? " active" : ""}`}
+              aria-pressed={node.alphaLocked}
+              title="透明度保護（塗ってある所だけに描く）"
+              aria-label="透明度保護"
+              onClick={() => patch({ alphaLocked: !node.alphaLocked })}
+            >
+              <Grid2x2 size={15} />
+            </button>
+          )}
           <button className={`icon-btn sm${node.locked ? " active" : ""}`} aria-pressed={node.locked} title={node.locked ? "ロック解除" : "ロック"} aria-label="ロック" onClick={() => patch({ locked: !node.locked })}>
             {node.locked ? <Lock size={15} /> : <LockOpen size={15} />}
           </button>

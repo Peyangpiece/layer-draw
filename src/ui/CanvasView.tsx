@@ -4,13 +4,16 @@ import { findNode } from "../core/document";
 import type { Point } from "../core/partOps";
 import type { LayerDocument } from "../core/types";
 import { Canvas2DCompositor } from "../render/compositor";
+import { toHex } from "../decompose/color";
+import { StrokeSession, type BrushSettings } from "../paint/strokeSession";
+import { collectBitmapIds } from "../store/buildFromImport";
 import { useEditor } from "../store/editorStore";
 import { hitTestPart, moveBrush, pickMoveTarget, pickSplitTarget, splitLayer } from "../store/partActions";
 import {
   cssTransform, fitView, panBy, pinch, rotateTo, screenToDoc, snapRotation, zoomTo, type Pt, type ViewTransform,
 } from "./viewport";
 
-export type CanvasTool = "select" | "split" | "move" | "hand";
+export type CanvasTool = "select" | "split" | "move" | "pen" | "eraser" | "hand";
 export type MessageKind = "info" | "error";
 
 /** これ以下の移動（CSS px）なら「タップ」とみなす */
@@ -39,6 +42,10 @@ export interface CanvasViewProps {
   multiSelect: boolean;
   /** パーツ移動ブラシの直径（ドキュメント px） */
   brushSize: number;
+  /** ペン・消しゴムの設定 */
+  paint: { pen: BrushSettings & { color: string }; eraser: BrushSettings };
+  /** スポイト（Alt + クリック）で色を拾ったとき */
+  onPickColor: (hex: string) => void;
   view: ViewTransform | null;
   setView: Dispatch<SetStateAction<ViewTransform | null>>;
   onViewportSize: (w: number, h: number) => void;
@@ -52,7 +59,7 @@ export interface CanvasViewProps {
  * - 操作: ツール（選択のタップ / 分割の線引き）、移動（手のひら・Space・中ボタン・ホイール）、
  *   ピンチ（拡大・回転・移動）、Ctrl/Cmd+ホイール（拡大）、2 本指タップ（取り消し）・3 本指タップ（やり直し）
  */
-export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, onViewportSize, onMessage, onCursor }: CanvasViewProps) {
+export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickColor, view, setView, onViewportSize, onMessage, onCursor }: CanvasViewProps) {
   const { state, dispatch, bitmaps } = useEditor();
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -98,6 +105,25 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
     if (size) setView(fitView(doc.width, doc.height, size.w, size.h));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id, size !== null]);
+
+  // ---- ペン・消しゴム: 描いている途中は、そのレイヤーだけ描きかけの画像に置き換えて合成する ----
+  const paintRef = useRef<{ session: StrokeSession; layerId: string } | null>(null);
+  const rafRef = useRef(0);
+  const renderNow = () => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ps = paintRef.current;
+    if (ps) ps.session.updatePreview();
+    compositor.render(doc, c, ps ? new Map([[ps.layerId, ps.session.override]]) : undefined);
+  };
+  const scheduleRender = () => {
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      renderNow();
+    });
+  };
+  const cursorSize = tool === "pen" ? paint.pen.size : tool === "eraser" ? paint.eraser.size : brushSize;
 
   // ---- 合成 ----
   useEffect(() => {
@@ -244,11 +270,11 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
     lastHover.current = p;
     const el = brushCursorRef.current;
     if (!el) return;
-    if (!p || tool !== "move" || spaceHeld) {
+    if (!p || (tool !== "move" && tool !== "pen" && tool !== "eraser") || spaceHeld) {
       el.style.display = "none";
       return;
     }
-    const d = brushSize * (viewRef.current?.scale ?? 1);
+    const d = Math.max(4, cursorSize * (viewRef.current?.scale ?? 1));
     el.style.display = "block";
     el.style.width = `${d}px`;
     el.style.height = `${d}px`;
@@ -258,7 +284,7 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
   useEffect(() => {
     moveBrushCursor(lastHover.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brushSize, view?.scale, tool, spaceHeld]);
+  }, [cursorSize, view?.scale, tool, spaceHeld]);
   const targetColor = (id: string | undefined) => {
     const n = id ? findNode(doc.root, id) : undefined;
     return (n?.kind === "raster" && n.part?.fillColor) || getComputedStyle(viewportRef.current!).getPropertyValue("--accent").trim() || "#4c8dff";
@@ -285,6 +311,50 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
     };
   };
 
+  /** ペン（スタイラス）だけ筆圧を使う。マウスは押している間 0.5 を返し、指は 0 のことがあるので常に 1 とする */
+  const pressureOf = (e: PointerEvent | React.PointerEvent) => (e.pointerType === "pen" ? (e.pressure > 0 ? e.pressure : 0.5) : 1);
+
+  const startPaint = (e: React.PointerEvent, p: Pt) => {
+    const d = toDoc(p);
+    if (e.altKey) {
+      // スポイト: 表示中の色（合成結果）を拾う。透明な所は白い紙の上の色とみなす
+      const c = canvasRef.current, x = Math.floor(d.x), y = Math.floor(d.y);
+      if (c && x >= 0 && y >= 0 && x < doc.width && y < doc.height) {
+        const px = c.getContext("2d")!.getImageData(x, y, 1, 1).data, a = px[3]! / 255;
+        const hex = toHex(px[0]! * a + 255 * (1 - a), px[1]! * a + 255 * (1 - a), px[2]! * a + 255 * (1 - a));
+        onPickColor(hex);
+        onMessage(`色を取得しました（${hex}）`);
+      }
+      return;
+    }
+    const id = state.selectedIds[state.selectedIds.length - 1];
+    const target = id ? findNode(doc.root, id) : undefined;
+    const what = tool === "pen" ? "描く" : "消す";
+    if (!target) return onMessage(`${what}レイヤーを、レイヤー一覧で選んでください`, "error");
+    if (target.kind !== "raster") return onMessage(`フォルダには${what === "描く" ? "描けません" : "使えません"}。レイヤーを選んでください`, "error");
+    if (!target.visible) return onMessage(`「${target.name}」は非表示のため${what === "描く" ? "描けません" : "消せません"}`, "error");
+    if (target.locked) return onMessage(`「${target.name}」はロックされています`, "error");
+    if (tool === "eraser" && target.alphaLocked) return onMessage(`「${target.name}」は透明度保護中のため、消しゴムは使えません`, "error");
+
+    // 取り消し履歴から参照されなくなった画像を解放してから始める（描くたびに新しい画像ができるため）
+    const h = state.history;
+    if (h) {
+      const live = collectBitmapIds([...h.past, h.present, ...h.future, ...(h.pending ? [h.pending] : [])]);
+      bitmaps.gc(live);
+    }
+    const s = tool === "pen" ? paint.pen : paint.eraser;
+    const session = new StrokeSession(bitmaps.get(target.bitmapId), target.bounds, doc.width, doc.height, {
+      ...s,
+      mode: tool === "pen" ? "pen" : "eraser",
+      color: paint.pen.color,
+      alphaLocked: target.alphaLocked,
+    });
+    session.add(d.x, d.y, pressureOf(e));
+    paintRef.current = { session, layerId: target.id };
+    gesture.current = { kind: "tool", id: e.pointerId, start: p, stroke: null };
+    scheduleRender();
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     const p = local(e);
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -303,6 +373,11 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
           gesture.current = { kind: "none" };
           drawOverlay();
           clearBrushPreview();
+          if (paintRef.current) {
+            // 描きかけのストロークは捨てる（2 本指の操作に切り替え）
+            paintRef.current = null;
+            renderNow();
+          }
         }
         moveBrushCursor(null);
         if (gesture.current.kind !== "pinch") startPinch();
@@ -318,6 +393,10 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
       return;
     }
     if (e.button !== 0) return;
+    if (tool === "pen" || tool === "eraser") {
+      startPaint(e, p);
+      return;
+    }
     if (tool === "move") {
       const start = toDoc(p);
       const target = pickMoveTarget(doc, bitmaps, state.selectedIds, start);
@@ -368,6 +447,14 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
         }
       }
       applyView(pinch(g.startView, g.p1, g.p2, q1, q2, g.rotate));
+    } else if (g.kind === "tool" && g.id === e.pointerId && paintRef.current) {
+      // ペンの途中の位置（まとめて届く分）もすべて使う
+      const evs = (e.nativeEvent.getCoalescedEvents?.() ?? []) as PointerEvent[];
+      for (const ev of evs.length > 0 ? evs : [e.nativeEvent]) {
+        const d = toDoc(local(ev));
+        paintRef.current.session.add(d.x, d.y, pressureOf(ev));
+      }
+      scheduleRender();
     } else if (g.kind === "tool" && g.id === e.pointerId && g.stroke) {
       const d = toDoc(p);
       const last = g.stroke[g.stroke.length - 1]!;
@@ -414,9 +501,20 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
     }
     if (g.kind !== "tool" || g.id !== e.pointerId) return;
     gesture.current = { kind: "none" };
+    const ps = paintRef.current;
+    paintRef.current = null;
     if (cancelled) {
       drawOverlay();
       clearBrushPreview();
+      if (ps) renderNow();
+      return;
+    }
+
+    if (ps) {
+      // ストロークを確定: 新しい画像に差し替える（1 回の取り消し単位）
+      const result = ps.session.finish();
+      const bitmapId = bitmaps.add(result.image);
+      dispatch({ type: "updateLayers", updates: [{ id: ps.layerId, bitmapId, bounds: result.bounds }], remove: [], select: [ps.layerId] });
       return;
     }
 
@@ -490,6 +588,8 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, view, setView, o
         ? "crosshair"
         : tool === "move"
           ? "none" // 円カーソルを表示
+          : tool === "pen" || tool === "eraser"
+            ? "crosshair" // 円カーソルと併用（小さいブラシでも位置が分かるように）
           : "default";
   const stageStyle: React.CSSProperties = view
     ? { width: doc.width, height: doc.height, transform: cssTransform(view) }

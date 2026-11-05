@@ -1,7 +1,7 @@
 /**
  * アプリの枠（ツールレール・ツールオプションバー・ズーム操作・ステータスバー・トースト）。
  */
-import { Brush, ChevronDown, Combine, Hand, Info, CircleAlert, MousePointer2, Scissors, SquareDashedMousePointer, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Brush, Eraser, Pen, ChevronDown, Combine, Hand, Info, CircleAlert, MousePointer2, Scissors, SquareDashedMousePointer, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { CanvasTool, MessageKind } from "./CanvasView";
 
@@ -11,6 +11,8 @@ export const TOOLS: { id: CanvasTool; label: string; key: string; icon: ReactNod
   { id: "select", label: "選択", key: "V", icon: <MousePointer2 size={18} />, hint: "タップでパーツを選択。Shift / Ctrl + クリックで追加選択" },
   { id: "split", label: "分割", key: "C", icon: <Scissors size={18} />, hint: "パーツを端から端まで横切るように線を引くと分割" },
   { id: "move", label: "移動ブラシ", key: "B", icon: <Brush size={18} />, hint: "なぞった所にある隣のパーツの画素を移動先パーツへ移す。[ ] でサイズ変更" },
+  { id: "pen", label: "ペン", key: "P", icon: <Pen size={18} />, hint: "選択中のレイヤーに描く。Alt（Option）+ クリックで色を拾う。[ ] でサイズ変更" },
+  { id: "eraser", label: "消しゴム", key: "E", icon: <Eraser size={18} />, hint: "選択中のレイヤーを消す。[ ] でサイズ変更" },
   { id: "hand", label: "手のひら", key: "H", icon: <Hand size={18} />, hint: "ドラッグで表示位置を移動。Space を押している間も使えます" },
 ];
 
@@ -45,6 +47,9 @@ export function ContextBar({
   brushSize,
   onBrushSize,
   moveTarget,
+  paint,
+  onPaint,
+  paintTarget,
 }: {
   tool: CanvasTool;
   multiSelect: boolean;
@@ -56,6 +61,11 @@ export function ContextBar({
   onBrushSize: (v: number) => void;
   /** 移動ブラシの移動先（選択中のパーツ）。未選択なら undefined */
   moveTarget?: { name: string; color?: string };
+  /** ペン・消しゴムの設定と変更 */
+  paint: PaintSettings;
+  onPaint: (p: PaintSettings) => void;
+  /** ペン・消しゴムで描くレイヤー（選択中のレイヤー）の名前。描けない場合は理由 */
+  paintTarget: { name: string } | { reason: string };
 }) {
   const info = TOOLS.find((t) => t.id === tool)!;
   return (
@@ -101,6 +111,9 @@ export function ContextBar({
           </span>
         </>
       )}
+      {(tool === "pen" || tool === "eraser") && (
+        <PaintOptions tool={tool} paint={paint} onPaint={onPaint} target={paintTarget} />
+      )}
       <span className="context-hint">{info.hint}</span>
     </div>
   );
@@ -113,6 +126,75 @@ export const BRUSH_MAX = 200;
 export function stepBrushSize(size: number, dir: 1 | -1): number {
   const step = size < 10 ? 1 : size < 50 ? 5 : 10;
   return Math.min(BRUSH_MAX, Math.max(BRUSH_MIN, size + dir * step));
+}
+
+// ---------------------------------------------------------------- ペン・消しゴム
+
+export interface PaintSettings {
+  pen: { size: number; opacity: number; usePressure: boolean; smoothing: number; color: string };
+  eraser: { size: number; opacity: number; usePressure: boolean; smoothing: number };
+}
+
+export const DEFAULT_PAINT: PaintSettings = {
+  pen: { size: 6, opacity: 1, usePressure: true, smoothing: 3, color: "#222222" },
+  eraser: { size: 24, opacity: 1, usePressure: false, smoothing: 0 },
+};
+
+export const PAINT_SIZE_MAX = 500;
+
+/** [ ] キーでのペン・消しゴムの大きさ変更（小さいときは細かく、大きいときは粗く） */
+export function stepPaintSize(size: number, dir: 1 | -1): number {
+  const step = size < 10 ? 1 : size < 50 ? 5 : size < 200 ? 10 : 20;
+  return Math.min(PAINT_SIZE_MAX, Math.max(1, size + dir * step));
+}
+
+function PaintOptions({
+  tool,
+  paint,
+  onPaint,
+  target,
+}: {
+  tool: "pen" | "eraser";
+  paint: PaintSettings;
+  onPaint: (p: PaintSettings) => void;
+  target: { name: string } | { reason: string };
+}) {
+  const s = paint[tool];
+  const set = (patch: Partial<PaintSettings["pen"]>) => onPaint({ ...paint, [tool]: { ...s, ...patch } });
+  return (
+    <>
+      {tool === "pen" && (
+        <label className="context-field" title="ペンの色（Alt / Option + クリックでキャンバスから拾う）">
+          <span>色</span>
+          <input id="pen-color" type="color" value={paint.pen.color} onChange={(e) => onPaint({ ...paint, pen: { ...paint.pen, color: e.target.value } })} />
+        </label>
+      )}
+      <label className="context-field" title="直径（画像のピクセル）。[ で小さく、] で大きく">
+        <span>サイズ</span>
+        <input id={`${tool}-size`} type="range" min={1} max={PAINT_SIZE_MAX} step={1} value={s.size} onChange={(e) => set({ size: Number(e.target.value) })} />
+        <span className="prop-value">{s.size}px</span>
+      </label>
+      <label className="context-field">
+        <span>不透明度</span>
+        <input id={`${tool}-opacity`} type="range" min={1} max={100} step={1} value={Math.round(s.opacity * 100)} onChange={(e) => set({ opacity: Number(e.target.value) / 100 })} className="short" />
+        <span className="prop-value">{Math.round(s.opacity * 100)}%</span>
+      </label>
+      <label className="context-field check" title="ペン（スタイラス）の筆圧で太さを変える。マウス・指では常に最大の太さ">
+        <input id={`${tool}-pressure`} type="checkbox" checked={s.usePressure} onChange={(e) => set({ usePressure: e.target.checked })} />
+        <span>筆圧</span>
+      </label>
+      <label className="context-field" title="手ブレ補正（大きいほどなめらかで、ペン先から遅れる）">
+        <span>手ブレ補正</span>
+        <input id={`${tool}-smoothing`} type="range" min={0} max={10} step={1} value={s.smoothing} onChange={(e) => set({ smoothing: Number(e.target.value) })} className="short" />
+        <span className="prop-value">{s.smoothing}</span>
+      </label>
+      <span className="divider" aria-hidden />
+      <span className="context-field">
+        <span>{tool === "pen" ? "描く先" : "消す先"}</span>
+        {"name" in target ? <span className="target-chip">{target.name}</span> : <span className="muted">{target.reason}</span>}
+      </span>
+    </>
+  );
 }
 
 // ---------------------------------------------------------------- ズーム

@@ -175,6 +175,9 @@ button:disabled { opacity: 0.38; cursor: default; }
 .chip.active { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); }
 .context-field { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .context-field input[type="range"] { width: 140px; }
+.context-field input[type="range"].short { width: 90px; }
+.context-field.check { gap: 6px; }
+.context-field input[type="color"] { width: 32px; height: 22px; }
 .target-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-weight: 500; }
 .chip.ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
 

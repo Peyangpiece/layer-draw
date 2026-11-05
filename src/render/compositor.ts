@@ -18,8 +18,15 @@ import type { BlendMode, LayerDocument, LayerGroup, LayerNode } from "../core/ty
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
 
+/** 描画中のレイヤーなど、ビットマップの代わりに表示するキャンバス（ドキュメント座標の (x, y) に置く） */
+export interface LayerOverride {
+  canvas: AnyCanvas;
+  x: number;
+  y: number;
+}
+
 export interface Compositor {
-  render(doc: LayerDocument, target: HTMLCanvasElement): void;
+  render(doc: LayerDocument, target: HTMLCanvasElement, overrides?: Map<string, LayerOverride>): void;
 }
 
 const BLEND_TO_COMPOSITE: Record<BlendMode, GlobalCompositeOperation> = {
@@ -45,7 +52,11 @@ const BLEND_TO_COMPOSITE: Record<BlendMode, GlobalCompositeOperation> = {
 export class Canvas2DCompositor implements Compositor {
   constructor(private store: BitmapStore) {}
 
-  render(doc: LayerDocument, target: HTMLCanvasElement): void {
+  private overrides: Map<string, LayerOverride> | undefined;
+
+  /** overrides: レイヤー ID → 代わりに描くキャンバス（ペン・消しゴムで描いている途中の表示用） */
+  render(doc: LayerDocument, target: HTMLCanvasElement, overrides?: Map<string, LayerOverride>): void {
+    this.overrides = overrides;
     if (target.width !== doc.width || target.height !== doc.height) {
       target.width = doc.width;
       target.height = doc.height;
@@ -100,11 +111,12 @@ export class Canvas2DCompositor implements Compositor {
   private drawNode(ctx: Ctx2D, node: LayerNode, w: number, h: number, blend: BlendMode, opacity: number): void {
     if (!node.visible) return;
     if (node.kind === "raster") {
-      const src = this.store.getCanvas(node.bitmapId);
+      const ov = this.overrides?.get(node.id);
+      const src = ov ? ov.canvas : this.store.getCanvas(node.bitmapId);
       if (!src) return;
       ctx.globalCompositeOperation = BLEND_TO_COMPOSITE[blend];
       ctx.globalAlpha = opacity;
-      ctx.drawImage(src, node.bounds.x, node.bounds.y);
+      ctx.drawImage(src, ov ? ov.x : node.bounds.x, ov ? ov.y : node.bounds.y);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
       return;

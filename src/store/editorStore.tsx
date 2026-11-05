@@ -4,7 +4,7 @@
  */
 import { createContext, useContext, useMemo, useReducer, type Dispatch, type ReactNode } from "react";
 import { BitmapStore } from "../core/bitmapStore";
-import { findNode, moveNode, removeNode, replaceNode, updateNode } from "../core/document";
+import { findNode, insertNode, moveNode, removeNode, replaceNode, updateNode } from "../core/document";
 import { commit, createHistory, push, redo, replace, undo, type History } from "../core/history";
 import type { LayerDocument, LayerNode, Rect } from "../core/types";
 
@@ -15,7 +15,7 @@ export interface EditorState {
 }
 
 /** レイヤー共通の属性と、フォルダの開閉 */
-export type NodePatch = Partial<Pick<LayerNode, "name" | "visible" | "opacity" | "blendMode" | "clipping" | "locked">> & { expanded?: boolean };
+export type NodePatch = Partial<Pick<LayerNode, "name" | "visible" | "opacity" | "blendMode" | "clipping" | "locked">> & { expanded?: boolean; alphaLocked?: boolean };
 
 export type EditorAction =
   | { type: "open"; doc: LayerDocument }
@@ -25,6 +25,8 @@ export type EditorAction =
   | { type: "replaceNode"; id: string; nodes: LayerNode[]; select?: string[] }
   /** 複数ノードを削除し、merged を insertAt の位置に置く（パーツ結合） */
   | { type: "mergeNodes"; ids: string[]; merged: LayerNode; insertAt: string }
+  /** ノードを親の index の位置に挿入して選択する（新規レイヤー）。parentId 省略時はルート */
+  | { type: "insertNode"; node: LayerNode; parentId?: string; index: number }
   /** 複数のラスタレイヤーのビットマップと範囲を差し替え、remove のレイヤーを削除する（パーツ移動ブラシ）。1 ステップの履歴になる */
   | { type: "updateLayers"; updates: { id: string; bitmapId: string; bounds: Rect }[]; remove: string[]; select?: string[] }
   /** commit=false のときは履歴に積まない（スライダーのドラッグ中など） */
@@ -66,6 +68,8 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         selectedIds: action.select ?? state.selectedIds.filter((i) => !action.remove.includes(i)),
       };
     }
+    case "insertNode":
+      return { history: push(h, insertNode(h.present, action.node, action.index, action.parentId)), selectedIds: [action.node.id] };
     case "mergeNodes": {
       // insertAt の位置を merged で置き換え、残りを削除する
       let doc = replaceNode(h.present, action.insertAt, [action.merged]);

@@ -14,7 +14,7 @@ import { buildDocumentFromLayered, placeOnCanvas } from "./store/buildFromLayere
 import { useEditor } from "./store/editorStore";
 import { mergeSelected } from "./store/partActions";
 import { CanvasView, type CanvasTool, type MessageKind } from "./ui/CanvasView";
-import { ContextBar, StatusBar, stepBrushSize, Toasts, ToolRail, ZoomControl, type Toast } from "./ui/Chrome";
+import { ContextBar, DEFAULT_PAINT, StatusBar, stepPaintSize, stepBrushSize, Toasts, ToolRail, ZoomControl, type PaintSettings, type Toast } from "./ui/Chrome";
 import { DecomposePanel } from "./ui/DecomposePanel";
 import { LayerPanel } from "./ui/LayerPanel";
 import { centerAt, fitView, nextPreset, rotateTo, rotationDegrees, zoomTo, type Pt, type ViewTransform } from "./ui/viewport";
@@ -36,7 +36,7 @@ function decomposeSummary(result: DecomposeResult): string {
   const lineNote = lw.auto && lw.estimated !== null ? `・線の太さ 約${lw.estimated}px` : "";
   return `パーツ ${result.parts.length} 個に分解しました（塗り: ${FILL_LABEL[result.resolvedFill]}${lineNote}・${(total / 1000).toFixed(1)} 秒）`;
 }
-const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", b: "move", h: "hand" };
+const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", b: "move", p: "pen", e: "eraser", h: "hand" };
 
 type Busy = { label: string; job?: DecomposeJob } | null;
 
@@ -51,6 +51,10 @@ export function App() {
   const [tool, setTool] = useState<CanvasTool>("select");
   const [multiSelect, setMultiSelect] = useState(false);
   const [brushSize, setBrushSize] = useState(20);
+  const [paint, setPaint] = useState<PaintSettings>(DEFAULT_PAINT);
+  // キー操作の処理から今のツールを参照するため（[ ] で今のツールの大きさを変える）
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
   const [view, setView] = useState<ViewTransform | null>(null);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const [panelOpen, setPanelOpen] = useState(false); // 狭い画面でのボトムシート
@@ -214,6 +218,16 @@ export function App() {
   // 移動ブラシの移動先として表示する主選択パーツ
   const primary = doc && state.selectedIds.length > 0 ? findNode(doc.root, state.selectedIds[state.selectedIds.length - 1]!) : undefined;
   const moveTarget = primary?.kind === "raster" && primary.role === "part" ? { name: primary.name, color: primary.part?.fillColor } : undefined;
+  // ペン・消しゴムで描く先（選択中のレイヤー）
+  const paintTarget = !primary
+    ? { reason: "レイヤーを選んでください" }
+    : primary.kind !== "raster"
+      ? { reason: "フォルダには描けません" }
+      : !primary.visible
+        ? { reason: `「${primary.name}」は非表示です` }
+        : primary.locked
+          ? { reason: `「${primary.name}」はロック中です` }
+          : { name: primary.name + (primary.alphaLocked ? "（透明度保護）" : "") };
   const partCount = doc ? listRasterLayers(doc.root).filter((l) => l.role === "part").length : 0;
   const merge = () => {
     if (!doc) return;
@@ -263,7 +277,13 @@ export function App() {
         e.preventDefault();
         fileRef.current?.click();
       } else if (!mod && (e.key === "[" || e.key === "]")) {
-        setBrushSize((v) => stepBrushSize(v, e.key === "]" ? 1 : -1));
+        const dir = e.key === "]" ? 1 : -1;
+        const t = toolRef.current;
+        if (t === "pen" || t === "eraser") {
+          setPaint((p) => ({ ...p, [t]: { ...p[t], size: stepPaintSize(p[t].size, dir) } }));
+        } else {
+          setBrushSize((v) => stepBrushSize(v, dir));
+        }
       } else if (!mod && !e.altKey && TOOL_KEYS[k]) {
         setTool(TOOL_KEYS[k]!);
       }
@@ -363,6 +383,9 @@ export function App() {
           brushSize={brushSize}
           onBrushSize={setBrushSize}
           moveTarget={moveTarget}
+          paint={paint}
+          onPaint={setPaint}
+          paintTarget={paintTarget}
         />
       )}
 
@@ -375,6 +398,8 @@ export function App() {
               tool={tool}
               multiSelect={multiSelect}
               brushSize={brushSize}
+              paint={paint}
+              onPickColor={(hex) => setPaint((p) => ({ ...p, pen: { ...p.pen, color: hex } }))}
               view={view}
               setView={setView}
               onViewportSize={onViewportSize}
