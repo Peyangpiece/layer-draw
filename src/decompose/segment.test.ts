@@ -212,3 +212,16 @@ describe("decompose（パーツレイヤー生成）", () => {
     for (let x = 12; x < 68; x++) expect(covered(x, 40)).toBe(true);
   });
 });
+
+describe("recolorPartsFrom", () => {
+  it("パーツの範囲の、線ではない画素の平均色に塗り直す", async () => {
+    const { recolorPartsFrom } = await import("./layers");
+    const W = 4, H = 1;
+    const image = { width: W, height: H, data: new Uint8ClampedArray([10, 20, 30, 255, 30, 40, 50, 255, 0, 0, 0, 255, 200, 200, 200, 255]) };
+    const lineart = { width: W, height: H, data: new Uint8ClampedArray([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0]) }; // x=2 は線
+    const part = { label: 0, name: "p", fillColor: "#ffffff", area: 3, x: 0, y: 0, image: { width: 3, height: 1, data: new Uint8ClampedArray([255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]) } };
+    const [r] = recolorPartsFrom([part], image, lineart);
+    expect(r!.fillColor).toBe("#141e28"); // (10+30)/2, (20+40)/2, (30+50)/2 = 20, 30, 40（線の x=2 は除く）
+    expect(Array.from(r!.image.data.slice(8, 12))).toEqual([20, 30, 40, 255]); // 線の下の画素も同じ色で塗る
+  });
+});

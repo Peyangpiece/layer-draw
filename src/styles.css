@@ -244,6 +244,8 @@ details[open] > summary .disclosure { transform: rotate(90deg); }
 .decompose-panel label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
 .field-head { display: flex; justify-content: space-between; }
 .range-field .hint { color: var(--text-faint); font-size: 11px; }
+.field-note { margin: 0; font-size: 12px; color: var(--text-muted); }
+.field-note strong { color: var(--text); font-weight: 600; }
 .field-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
 
 /* フォーム部品 */

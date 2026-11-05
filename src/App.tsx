@@ -3,10 +3,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { findNode, listRasterLayers } from "./core/document";
 import { canRedo, canUndo } from "./core/history";
 import { runDecompose, type DecomposeJob } from "./decompose/client";
-import { DEFAULT_DECOMPOSE_PARAMS, type DecomposeParams, type DecomposeStage } from "./decompose/types";
+import { recolorPartsFrom } from "./decompose/layers";
+import { DEFAULT_DECOMPOSE_PARAMS, type DecomposeParams, type DecomposeResult, type DecomposeStage } from "./decompose/types";
 import { ACCEPT_ATTR } from "./io/formats";
-import { importImageFile, type ImportedImage } from "./io/importImage";
-import { buildDocumentFromImport } from "./store/buildFromImport";
+import { importFile } from "./io/importFile";
+import type { ImportedImage } from "./io/importImage";
+import { countRasters } from "./io/layered/model";
+import { buildDecomposedFolder, buildDocumentFromImport } from "./store/buildFromImport";
+import { buildDocumentFromLayered, placeOnCanvas } from "./store/buildFromLayered";
 import { useEditor } from "./store/editorStore";
 import { mergeSelected } from "./store/partActions";
 import { CanvasView, type CanvasTool, type MessageKind } from "./ui/CanvasView";
@@ -24,6 +28,14 @@ const STAGE_LABEL: Record<DecomposeStage, string> = {
 };
 
 const FILL_LABEL = { source: "元画像の色", palette: "自動配色", white: "白" } as const;
+
+/** 分解結果の通知文 */
+function decomposeSummary(result: DecomposeResult): string {
+  const total = Object.values(result.timings).reduce((a, b) => a + b, 0);
+  const lw = result.lineWidth;
+  const lineNote = lw.auto && lw.estimated !== null ? `・線の太さ 約${lw.estimated}px` : "";
+  return `パーツ ${result.parts.length} 個に分解しました（塗り: ${FILL_LABEL[result.resolvedFill]}${lineNote}・${(total / 1000).toFixed(1)} 秒）`;
+}
 const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", b: "move", h: "hand" };
 
 type Busy = { label: string; job?: DecomposeJob } | null;
@@ -67,10 +79,7 @@ export function App() {
       const result = await job.promise;
       bitmaps.clear();
       dispatch({ type: "open", doc: buildDocumentFromImport(imported, result, params, bitmaps) });
-      const total = Object.values(result.timings).reduce((a, b) => a + b, 0);
-      const lw = result.lineWidth;
-      const lineNote = lw.auto && lw.estimated !== null ? `・線の太さ 約${lw.estimated}px` : "";
-      return `パーツ ${result.parts.length} 個に分解しました（塗り: ${FILL_LABEL[result.resolvedFill]}${lineNote}・${(total / 1000).toFixed(1)} 秒）`;
+      return decomposeSummary(result);
     },
     [bitmaps, dispatch],
   );
@@ -79,7 +88,18 @@ export function App() {
     async (file: File) => {
       setBusy({ label: "画像を読み込んでいます" });
       try {
-        const imported = await importImageFile(file);
+        const res = await importFile(file);
+        if (res.kind === "layered") {
+          // レイヤー付きのファイルは、レイヤー構成のまま開く（自動分解はしない）
+          const imp = res.layered;
+          bitmaps.clear();
+          dispatch({ type: "open", doc: buildDocumentFromLayered(imp, bitmaps) });
+          showMessage(`${imp.format.toUpperCase()} のレイヤー ${countRasters(imp.children)} 枚を読み込みました。分解したいレイヤーを選び、「自動分解の設定」から分解できます`);
+          // 警告はまとめて 1 つにする（通知は最大 3 件なので、個別に出すと他の通知が押し出される）
+          if (imp.warnings.length > 0) showMessage(`反映できなかった内容: ${imp.warnings.join("。")}`, "error");
+          return;
+        }
+        const imported = res.image;
         const summary = await decomposeAndOpen(imported, DEFAULT_DECOMPOSE_PARAMS);
         imported.warnings.forEach((w) => showMessage(w));
         showMessage(summary);
@@ -89,7 +109,7 @@ export function App() {
         setBusy(null);
       }
     },
-    [decomposeAndOpen, showMessage],
+    [decomposeAndOpen, showMessage, bitmaps, dispatch],
   );
 
   // 確認ダイアログ。window.confirm は埋め込み先（サンドボックス化された iframe）で無視されることがあるため、ページ内に描く
@@ -129,6 +149,37 @@ export function App() {
       }
     },
     [h, runRedecompose],
+  );
+
+  // レイヤー単位の自動分解（レイヤー付きのファイル）: 選んだレイヤーだけを分解し、結果のフォルダをその上に入れて元のレイヤーを隠す
+  const primaryNode = doc && state.selectedIds.length > 0 ? findNode(doc.root, state.selectedIds[state.selectedIds.length - 1]!) : undefined;
+  const layerTarget = primaryNode?.kind === "raster" ? primaryNode : undefined;
+  const decomposeLayer = useCallback(
+    async (params: DecomposeParams) => {
+      if (!doc || !layerTarget) return;
+      const img = bitmaps.get(layerTarget.bitmapId);
+      if (!img) return;
+      try {
+        const job = runDecompose(placeOnCanvas(img, layerTarget.bounds, doc.width, doc.height), params, (stage) =>
+          setBusy((b) => (b ? { ...b, label: STAGE_LABEL[stage] } : b)),
+        );
+        setBusy({ label: STAGE_LABEL.lineart, job });
+        let result = await job.promise;
+        // 塗り色は、今見えている絵（全レイヤーの合成画像）から取る。「自動配色」「白」を選んだ場合はそのまま
+        const composite = doc.source && bitmaps.get(doc.source.bitmapId);
+        if (composite && (params.segment.fill === "auto" || params.segment.fill === "source")) {
+          result = { ...result, parts: recolorPartsFrom(result.parts, composite, result.lineart), resolvedFill: "source" };
+        }
+        const folder = buildDecomposedFolder(result, { width: doc.width, height: doc.height }, bitmaps, `自動分解: ${layerTarget.name}`);
+        dispatch({ type: "replaceNode", id: layerTarget.id, nodes: [folder, { ...layerTarget, visible: false }], select: [folder.id] });
+        showMessage(`「${layerTarget.name}」を${decomposeSummary(result)}。元のレイヤーは非表示にしました`);
+      } catch (e) {
+        showMessage(e instanceof Error ? e.message : String(e), "error");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [doc, layerTarget, bitmaps, dispatch, showMessage],
   );
 
   // ---------------------------------------------------------------- 表示（ズーム・回転）
@@ -342,7 +393,16 @@ export function App() {
                 <X size={16} />
               </button>
             </div>
-            {doc.source && <DecomposePanel key={doc.id} initial={doc.source.params} onRun={redecompose} disabled={!!busy} />}
+            {doc.source && (
+              <DecomposePanel
+                key={doc.id}
+                initial={doc.source.params}
+                mode={doc.source.layered ? "layer" : "document"}
+                targetName={layerTarget?.name}
+                onRun={doc.source.layered ? (p) => void decomposeLayer(p) : redecompose}
+                disabled={!!busy}
+              />
+            )}
             <LayerPanel doc={doc} />
           </aside>
         )}

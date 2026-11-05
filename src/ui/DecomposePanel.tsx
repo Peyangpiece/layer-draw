@@ -7,10 +7,16 @@ export const DecomposePanel = memo(function DecomposePanel({
   initial,
   onRun,
   disabled,
+  mode = "document",
+  targetName,
 }: {
   initial: DecomposeParams;
   onRun: (p: DecomposeParams) => void;
   disabled: boolean;
+  /** document: 画像全体を分解し直す / layer: 選択中のレイヤーを分解する（レイヤー付きのファイル） */
+  mode?: "document" | "layer";
+  /** mode=layer のとき、分解する対象のレイヤー名（未選択なら undefined） */
+  targetName?: string;
 }) {
   const [p, setP] = useState(initial);
   const setL = (patch: Partial<DecomposeParams["lineart"]>) => setP({ ...p, lineart: { ...p.lineart, ...patch } });
@@ -60,12 +66,23 @@ export const DecomposePanel = memo(function DecomposePanel({
           <input type="checkbox" checked={p.segment.borderAsBackground} onChange={(e) => setS({ borderAsBackground: e.target.checked })} />
           画像の端に接する領域は背景にする
         </label>
+        {mode === "layer" && (
+          <p className="field-note">
+            {targetName ? (
+              <>
+                分解するレイヤー: <strong>{targetName}</strong>。結果はその上にフォルダとして追加し、元のレイヤーは非表示にします
+              </>
+            ) : (
+              "分解するレイヤー（線画のレイヤーなど）をレイヤー一覧で選んでください"
+            )}
+          </p>
+        )}
         <div className="field-actions">
           <button className="btn ghost" onClick={() => setP(initial)} disabled={disabled}>
             元に戻す
           </button>
-          <button className="btn primary" disabled={disabled} onClick={() => onRun(p)}>
-            再分解
+          <button className="btn primary" disabled={disabled || (mode === "layer" && !targetName)} onClick={() => onRun(p)}>
+            {mode === "layer" ? "選択中のレイヤーを分解" : "再分解"}
           </button>
         </div>
       </div>

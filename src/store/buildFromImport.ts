@@ -10,7 +10,7 @@
  */
 import type { BitmapStore } from "../core/bitmapStore";
 import { createDocument, createGroup, createRasterLayer } from "../core/document";
-import type { LayerDocument, LayerNode } from "../core/types";
+import type { LayerDocument, LayerGroup, LayerNode } from "../core/types";
 import type { DecomposeParams, DecomposeResult, RasterImage } from "../decompose/types";
 import type { ImportedImage } from "../io/importImage";
 
@@ -34,24 +34,7 @@ export function buildDocumentFromImport(
   const { width, height } = imported.image;
   const full = { x: 0, y: 0, w: width, h: height };
 
-  const lineartId = store.add(toImageData(result.lineart));
-  const lineart = createRasterLayer({
-    name: "線画",
-    role: "lineart",
-    bitmapId: lineartId,
-    bounds: full,
-    isReference: true,
-  });
-
-  const parts: LayerNode[] = result.parts.map((p) =>
-    createRasterLayer({
-      name: p.name,
-      role: "part",
-      bitmapId: store.add(toImageData(p.image)),
-      bounds: { x: p.x, y: p.y, w: p.image.width, h: p.image.height },
-      part: { fillColor: p.fillColor, sourceLabel: p.label },
-    }),
-  );
+  const folder = buildDecomposedFolder(result, { width, height }, store);
 
   const sourceId = store.add(imported.image);
   const source = createRasterLayer({
@@ -70,7 +53,6 @@ export function buildDocumentFromImport(
     bounds: full,
   });
 
-  const folder = createGroup("自動分解", [lineart, ...parts]);
   const root = createGroup("root", [folder, source, bg]);
   const name = imported.fileName.replace(/\.[^.]+$/, "") || "無題";
   const doc = createDocument(name, width, height, root);
@@ -85,6 +67,30 @@ export function buildDocumentFromImport(
       params,
     },
   };
+}
+
+/**
+ * 自動分解の結果を「線画（参照レイヤー）+ パーツ（面積の大きい順）」のフォルダにする。
+ * 画像全体の分解でも、レイヤー単位の分解でも使う
+ */
+export function buildDecomposedFolder(result: DecomposeResult, size: { width: number; height: number }, store: BitmapStore, name = "自動分解"): LayerGroup {
+  const lineart = createRasterLayer({
+    name: "線画",
+    role: "lineart",
+    bitmapId: store.add(toImageData(result.lineart)),
+    bounds: { x: 0, y: 0, w: size.width, h: size.height },
+    isReference: true,
+  });
+  const parts: LayerNode[] = result.parts.map((p) =>
+    createRasterLayer({
+      name: p.name,
+      role: "part",
+      bitmapId: store.add(toImageData(p.image)),
+      bounds: { x: p.x, y: p.y, w: p.image.width, h: p.image.height },
+      part: { fillColor: p.fillColor, sourceLabel: p.label },
+    }),
+  );
+  return createGroup(name, [lineart, ...parts]);
 }
 
 /**

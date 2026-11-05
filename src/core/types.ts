@@ -65,7 +65,8 @@ export interface LayerGroup extends LayerBase {
 
 export type LayerNode = RasterLayer | LayerGroup;
 
-export type SourceFormat = "png" | "jpeg" | "svg";
+/** 1 枚の画像（png/jpeg/svg）と、レイヤー付きのファイル（psd/ora） */
+export type SourceFormat = "png" | "jpeg" | "svg" | "psd" | "ora";
 
 export interface SourceImageInfo {
   bitmapId: string;
@@ -76,6 +77,11 @@ export interface SourceImageInfo {
   originalHeight: number;
   /** 直近の自動分解に使ったパラメータ（再分解の初期値） */
   params: DecomposeParams;
+  /**
+   * レイヤー付きのファイル（PSD / ORA）から開いたか。true のとき bitmapId は全レイヤーを合成した画像で、
+   * 「再分解」で全体を置き換えず、選んだレイヤーを分解する
+   */
+  layered?: boolean;
 }
 
 export interface LayerDocument {

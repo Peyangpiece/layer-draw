@@ -29,6 +29,30 @@ describe("detectFormat", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/svgz/);
   });
+  it("PSD / PSB を判定する", () => {
+    expect(detectFormat(new Uint8Array([0x38, 0x42, 0x50, 0x53, 0, 1]))).toEqual({ ok: true, format: "psd" });
+    expect(detectFormat(new Uint8Array([0x38, 0x42, 0x50, 0x53, 0, 2]))).toEqual({ ok: true, format: "psd" });
+    expect(detectFormat(new Uint8Array([0x38, 0x42, 0x50, 0x53, 0, 9])).ok).toBe(false);
+  });
+  it("OpenRaster を判定し、Krita・CLIP STUDIO・ただの ZIP は理由付きで拒否する", () => {
+    // ZIP のローカルファイルヘッダー: 署名 4 + 22 バイト、ファイル名の長さ（26-27）、拡張フィールド長（28-29）
+    const zipWith = (name: string, content: string) => {
+      const h = new Uint8Array(30 + name.length + content.length);
+      h.set([0x50, 0x4b, 0x03, 0x04]);
+      h[26] = name.length;
+      h.set(enc(name), 30);
+      h.set(enc(content), 30 + name.length);
+      return h;
+    };
+    expect(detectFormat(zipWith("mimetype", "image/openraster"))).toEqual({ ok: true, format: "ora" });
+    const kra = detectFormat(zipWith("mimetype", "application/x-krita"));
+    expect(kra.ok).toBe(false);
+    if (!kra.ok) expect(kra.reason).toMatch(/Krita/);
+    expect(detectFormat(zipWith("doc.txt", "hello")).ok).toBe(false);
+    const clip = detectFormat(enc("CSFCHUNK....."));
+    expect(clip.ok).toBe(false);
+    if (!clip.ok) expect(clip.reason).toMatch(/PSD/);
+  });
   it("GIF などは拒否する", () => {
     expect(detectFormat(enc("GIF89a")).ok).toBe(false);
   });

@@ -17,7 +17,13 @@
   "file_handlers": [
     {
       "action": "./",
-      "accept": { "image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"], "image/svg+xml": [".svg"] }
+      "accept": {
+        "image/png": [".png"],
+        "image/jpeg": [".jpg", ".jpeg"],
+        "image/svg+xml": [".svg"],
+        "image/vnd.adobe.photoshop": [".psd"],
+        "image/openraster": [".ora"]
+      }
     }
   ]
 }

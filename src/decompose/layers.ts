@@ -5,7 +5,7 @@
  */
 import { lightness01, toHex } from "./color";
 import type { SegmentResult } from "./segment";
-import type { DecomposedPart, FillMode } from "./types";
+import type { DecomposedPart, FillMode, RasterImage } from "./types";
 
 /** 平均色がこの明度以上なら「白い（塗られていない）領域」とみなす */
 const WHITE_LIGHTNESS = 0.95;
@@ -115,4 +115,40 @@ function hslToRgb(hDeg: number, s: number, l: number): [number, number, number] 
     hp < 1 ? [c, x, 0] : hp < 2 ? [x, c, 0] : hp < 3 ? [0, c, x] : hp < 4 ? [0, x, c] : hp < 5 ? [x, 0, c] : [c, 0, x];
   const mm = l - c / 2;
   return [Math.round((r1 + mm) * 255), Math.round((g1 + mm) * 255), Math.round((b1 + mm) * 255)];
+}
+
+/** 線と判定された画素とみなす線画アルファ（0..255）。segment の SEED_MAX_ALPHA と同じ約 0.15 */
+const LINE_ALPHA = 38;
+
+/**
+ * パーツの塗り色を、別の画像（例: レイヤー付きファイルの全レイヤーの合成画像）の色に付け直す。
+ * 各パーツの範囲のうち線ではない画素（線画アルファ < 約 0.15）の平均色を使う（白背景に合成した色）。
+ * 線画レイヤーだけを分解した場合、パーツの元の色は白（自動配色）になるが、
+ * すでに塗られた絵では、今見えている色から始める方が自然なため。
+ */
+export function recolorPartsFrom(parts: DecomposedPart[], image: RasterImage, lineart: RasterImage): DecomposedPart[] {
+  const W = image.width;
+  return parts.map((p) => {
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let y = 0; y < p.image.height; y++) {
+      for (let x = 0; x < p.image.width; x++) {
+        if (p.image.data[(y * p.image.width + x) * 4 + 3] === 0) continue;
+        const i = ((p.y + y) * W + (p.x + x)) * 4;
+        if (lineart.data[i + 3]! >= LINE_ALPHA) continue;
+        const a = image.data[i + 3]! / 255;
+        r += image.data[i]! * a + 255 * (1 - a);
+        g += image.data[i + 1]! * a + 255 * (1 - a);
+        b += image.data[i + 2]! * a + 255 * (1 - a);
+        n++;
+      }
+    }
+    if (n === 0) return p;
+    const c = [Math.round(r / n), Math.round(g / n), Math.round(b / n)] as const;
+    const data = new Uint8ClampedArray(p.image.data);
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue;
+      data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2];
+    }
+    return { ...p, fillColor: toHex(c[0], c[1], c[2]), image: { width: p.image.width, height: p.image.height, data } };
+  });
 }
