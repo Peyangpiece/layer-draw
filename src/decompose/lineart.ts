@@ -87,6 +87,10 @@ export function extractLineart(src: RasterImage, params: LineartParams): RasterI
 
 /** 線の太さの推定で「暗い」とみなす明度（0..1）。L-1 で線のしきい値 0.5 に相当する明るさ */
 const DARK_LIGHTNESS = 0.55;
+/** 線らしさ: 芯の画素数が距離（太さの半分）のこの倍数以上なら線とみなす（線は太さに比べて長い） */
+const LINE_ELONGATION = 4;
+/** 線らしい芯の画素のうち、この割合をカバーする距離を太さの基準にする */
+const LINE_MASS_QUANTILE = 0.95;
 /** 推定した太さに掛ける余裕（線の太さのばらつきを許す） */
 const AUTO_WIDTH_MARGIN = 1.5;
 /** 自動で決める「線とみなす最大の太さ」の範囲（px） */
@@ -104,8 +108,9 @@ export interface LineWidthEstimate {
  * 画像の中で最も多い線の太さを推定する。
  *
  * 暗い画素について、暗くない画素までの距離（距離変換）を求め、その距離が上下左右より小さくない画素
- * （＝暗い部分の芯）を数える。線は芯の距離がほぼ一定（太さの半分）で長く続くので、距離の分布に山ができる。
- * 塗りつぶした暗い面の芯は距離がばらばらなので山を作らない。山の位置 × 2 を線の太さとする。
+ * （＝暗い部分の芯）を数える。線は芯の距離がほぼ一定（太さの半分）で長く続く。
+ * 塗りつぶした暗い面の芯は各距離に少ししかない。線らしい距離（芯の画素数が距離に比べて多い）の芯の 95% を
+ * カバーする距離 × 2 を線の太さとする（最も多い太さではない。理由は実装部のコメント参照）。
  *
  * 拡大してラスタライズした SVG や高解像度のスキャンでは線が太くなり、固定の上限（16px）だと
  * 輪郭線が「塗り」と判定されて線画に入らないため、上限をこの推定値から決める。
@@ -181,9 +186,30 @@ function estimateAtScale(src: RasterImage): LineWidthEstimate | null {
       if (half >= 1 && half < hist.length) hist[half]!++;
     }
   }
-  let best = 0;
-  for (let i = 1; i < hist.length; i++) if (hist[i]! > hist[best]!) best = i;
-  if (best === 0 || hist[best] === 0) return null;
+  // 線らしい距離だけを使う: 太さ（半分）d の線は芯が長さぶん並ぶので、芯の画素数が d に比べて十分多い
+  // （LINE_ELONGATION 倍以上）。塗りつぶした面の芯はそれぞれの距離に少ししかないので除かれる。
+  // そのうえで、線らしい芯の画素の LINE_MASS_QUANTILE をカバーする距離を基準にする。
+  // 「最も多い太さ」ではなく上の方を取るのは、太さの違う線（太い輪郭と細い縁取りなど）が混ざる絵で、
+  // 上限が太い輪郭より小さくなって輪郭が塗りと判定されるのを防ぐため
+  const lineLike = new Float64Array(hist.length);
+  let total = 0;
+  for (let d = 1; d < hist.length; d++) {
+    const c = (hist[d - 1]! + 2 * hist[d]! + (hist[d + 1] ?? 0)) / 4; // 隣と均す（1:2:1）
+    if (c >= LINE_ELONGATION * d) {
+      lineLike[d] = hist[d]!;
+      total += hist[d]!;
+    }
+  }
+  if (total === 0) return null;
+  let best = 0, cum = 0;
+  for (let d = 1; d < hist.length; d++) {
+    cum += lineLike[d]!;
+    if (cum >= total * LINE_MASS_QUANTILE) {
+      best = d;
+      break;
+    }
+  }
+  if (best === 0) return null;
   // 芯の画素の中心から暗くない画素の中心までの距離は、太さ W の線でおよそ (W + 1) / 2
   const widthPx = Math.max(1, 2 * best - 1);
   return { width: widthPx, maxLineWidth: clampMaxLineWidth(widthPx) };

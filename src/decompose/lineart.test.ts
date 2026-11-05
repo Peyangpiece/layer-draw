@@ -119,6 +119,19 @@ describe("estimateLineWidth", () => {
     const e = estimateLineWidth(rings(lineW).image())!;
     expect(Math.abs(e.width - lineW)).toBeLessThanOrEqual(2);
   });
+  it("太さの違う線が同じくらいある場合は、太い方を選ぶ（上限は太い線も線と判定できる値にする）", () => {
+    // 太さ 20px の円 2 本と、太さ 8px の円 3 本（芯の長さが同程度）
+    const s = new Sketch(600, 600);
+    for (const r of [120, 230]) s.strokeCircle(300, 300, r, 20);
+    for (const r of [70, 170, 270]) s.strokeCircle(300, 300, r, 8);
+    expect(Math.abs(estimateLineWidth(s.image())!.width - 20)).toBeLessThanOrEqual(2);
+  });
+  it("大きな画像でも、太さの違う線が混ざると太い方を選ぶ（縮小して推定しても）", () => {
+    const s = new Sketch(2048, 2048);
+    for (const r of [400, 800]) s.strokeCircle(1024, 1024, r, 38);
+    for (const r of [250, 600, 950]) s.strokeCircle(1024, 1024, r, 19);
+    expect(Math.abs(estimateLineWidth(s.image())!.width - 38)).toBeLessThanOrEqual(4);
+  });
   it("大きな暗い塗りがあっても、線の太さを選ぶ", () => {
     const s = rings(6);
     s.fillRect(20, 20, 120, 90, [20, 20, 20]); // 黒ベタ
