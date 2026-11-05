@@ -36,7 +36,7 @@ function decomposeSummary(result: DecomposeResult): string {
   const lineNote = lw.auto && lw.estimated !== null ? `・線の太さ 約${lw.estimated}px` : "";
   return `パーツ ${result.parts.length} 個に分解しました（塗り: ${FILL_LABEL[result.resolvedFill]}${lineNote}・${(total / 1000).toFixed(1)} 秒）`;
 }
-const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", b: "move", p: "pen", e: "eraser", h: "hand" };
+const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", b: "move", p: "pen", e: "eraser", i: "picker", h: "hand" };
 
 type Busy = { label: string; job?: DecomposeJob } | null;
 
@@ -55,6 +55,17 @@ export function App() {
   // キー操作の処理から今のツールを参照するため（[ ] で今のツールの大きさを変える）
   const toolRef = useRef(tool);
   toolRef.current = tool;
+  /** スポイトに切り替える直前のツール（色を拾ったら戻る） */
+  const beforePickerRef = useRef<CanvasTool>("pen");
+  const selectTool = useCallback((t: CanvasTool) => {
+    if (t === "picker" && toolRef.current !== "picker") beforePickerRef.current = toolRef.current;
+    setTool(t);
+  }, []);
+  /** 色を拾い終えたら、ペン・消しゴムからなら元に戻り、それ以外からならペンにする（色を拾うのは描くため） */
+  const onPickerDone = useCallback(() => {
+    const prev = beforePickerRef.current;
+    setTool(prev === "pen" || prev === "eraser" ? prev : "pen");
+  }, []);
   const [view, setView] = useState<ViewTransform | null>(null);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const [panelOpen, setPanelOpen] = useState(false); // 狭い画面でのボトムシート
@@ -285,12 +296,12 @@ export function App() {
           setBrushSize((v) => stepBrushSize(v, dir));
         }
       } else if (!mod && !e.altKey && TOOL_KEYS[k]) {
-        setTool(TOOL_KEYS[k]!);
+        selectTool(TOOL_KEYS[k]!);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dispatch, zoomStep, fit, setScale]);
+  }, [dispatch, zoomStep, fit, setScale, selectTool]);
 
   const rotationDeg = view ? rotationDegrees(view) : 0;
 
@@ -386,11 +397,12 @@ export function App() {
           paint={paint}
           onPaint={setPaint}
           paintTarget={paintTarget}
+          onPickTool={() => selectTool("picker")}
         />
       )}
 
       <div className="main">
-        {doc && <ToolRail tool={tool} onTool={setTool} />}
+        {doc && <ToolRail tool={tool} onTool={selectTool} />}
         <main className="workspace">
           {doc ? (
             <CanvasView
@@ -400,6 +412,7 @@ export function App() {
               brushSize={brushSize}
               paint={paint}
               onPickColor={(hex) => setPaint((p) => ({ ...p, pen: { ...p.pen, color: hex } }))}
+              onPickerDone={onPickerDone}
               view={view}
               setView={setView}
               onViewportSize={onViewportSize}

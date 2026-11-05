@@ -1,7 +1,7 @@
 /**
  * アプリの枠（ツールレール・ツールオプションバー・ズーム操作・ステータスバー・トースト）。
  */
-import { Brush, Eraser, Pen, ChevronDown, Combine, Hand, Info, CircleAlert, MousePointer2, Scissors, SquareDashedMousePointer, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Brush, Eraser, Pen, Pipette, ChevronDown, Combine, Hand, Info, CircleAlert, MousePointer2, Scissors, SquareDashedMousePointer, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { CanvasTool, MessageKind } from "./CanvasView";
 
@@ -13,6 +13,7 @@ export const TOOLS: { id: CanvasTool; label: string; key: string; icon: ReactNod
   { id: "move", label: "移動ブラシ", key: "B", icon: <Brush size={18} />, hint: "なぞった所にある隣のパーツの画素を移動先パーツへ移す。[ ] でサイズ変更" },
   { id: "pen", label: "ペン", key: "P", icon: <Pen size={18} />, hint: "選択中のレイヤーに描く。Alt（Option）+ クリックで色を拾う。[ ] でサイズ変更" },
   { id: "eraser", label: "消しゴム", key: "E", icon: <Eraser size={18} />, hint: "選択中のレイヤーを消す。[ ] でサイズ変更" },
+  { id: "picker", label: "スポイト", key: "I", icon: <Pipette size={18} />, hint: "押した所の色をペンの色にする（押したまま動かすと追従）。ペン中は Alt + クリック、指なら長押しでも拾える" },
   { id: "hand", label: "手のひら", key: "H", icon: <Hand size={18} />, hint: "ドラッグで表示位置を移動。Space を押している間も使えます" },
 ];
 
@@ -50,6 +51,7 @@ export function ContextBar({
   paint,
   onPaint,
   paintTarget,
+  onPickTool,
 }: {
   tool: CanvasTool;
   multiSelect: boolean;
@@ -66,6 +68,8 @@ export function ContextBar({
   onPaint: (p: PaintSettings) => void;
   /** ペン・消しゴムで描くレイヤー（選択中のレイヤー）の名前。描けない場合は理由 */
   paintTarget: { name: string } | { reason: string };
+  /** スポイトツールにする */
+  onPickTool: () => void;
 }) {
   const info = TOOLS.find((t) => t.id === tool)!;
   return (
@@ -112,7 +116,14 @@ export function ContextBar({
         </>
       )}
       {(tool === "pen" || tool === "eraser") && (
-        <PaintOptions tool={tool} paint={paint} onPaint={onPaint} target={paintTarget} />
+        <PaintOptions tool={tool} paint={paint} onPaint={onPaint} target={paintTarget} onPickTool={onPickTool} />
+      )}
+      {tool === "picker" && (
+        <span className="context-field">
+          <span>今の色</span>
+          <span className="swatch lg" style={{ background: paint.pen.color }} aria-hidden />
+          <span className="prop-value mono">{paint.pen.color}</span>
+        </span>
       )}
       <span className="context-hint">{info.hint}</span>
     </div>
@@ -153,11 +164,13 @@ function PaintOptions({
   paint,
   onPaint,
   target,
+  onPickTool,
 }: {
   tool: "pen" | "eraser";
   paint: PaintSettings;
   onPaint: (p: PaintSettings) => void;
   target: { name: string } | { reason: string };
+  onPickTool: () => void;
 }) {
   const s = paint[tool];
   const set = (patch: Partial<PaintSettings["pen"]>) => onPaint({ ...paint, [tool]: { ...s, ...patch } });
@@ -168,6 +181,11 @@ function PaintOptions({
           <span>色</span>
           <input id="pen-color" type="color" value={paint.pen.color} onChange={(e) => onPaint({ ...paint, pen: { ...paint.pen, color: e.target.value } })} />
         </label>
+      )}
+      {tool === "pen" && (
+        <button className="icon-btn sm" onClick={onPickTool} aria-label="スポイトで色を拾う" title="スポイトで色を拾う (I)">
+          <Pipette size={15} />
+        </button>
       )}
       <label className="context-field" title="直径（画像のピクセル）。[ で小さく、] で大きく">
         <span>サイズ</span>

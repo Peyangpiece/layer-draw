@@ -13,7 +13,7 @@ import {
   cssTransform, fitView, panBy, pinch, rotateTo, screenToDoc, snapRotation, zoomTo, type Pt, type ViewTransform,
 } from "./viewport";
 
-export type CanvasTool = "select" | "split" | "move" | "pen" | "eraser" | "hand";
+export type CanvasTool = "select" | "split" | "move" | "pen" | "eraser" | "picker" | "hand";
 export type MessageKind = "info" | "error";
 
 /** これ以下の移動（CSS px）なら「タップ」とみなす */
@@ -22,11 +22,15 @@ const TAP_SLOP = 6;
 const MULTI_TAP_MS = 300;
 /** ピンチ中、この角度（度）を超えてひねったら回転を有効にする（拡大だけのつもりで傾くのを防ぐ） */
 const ROTATE_THRESHOLD_DEG = 10;
+/** ペン・消しゴム中に指でこの時間（ms）動かさずに押し続けたらスポイトにする */
+const LONG_PRESS_MS = 500;
 
 type Gesture =
   | { kind: "none" }
   | { kind: "tool"; id: number; start: Pt; stroke: Point[] | null; targetId?: string }
   | { kind: "pan"; id: number; last: Pt }
+  /** スポイト: 押している間は拾う色が追従し、離した時点で確定する */
+  | { kind: "pick"; id: number; hex: string | null }
   | {
       kind: "pinch";
       ids: [number, number];
@@ -44,8 +48,10 @@ export interface CanvasViewProps {
   brushSize: number;
   /** ペン・消しゴムの設定 */
   paint: { pen: BrushSettings & { color: string }; eraser: BrushSettings };
-  /** スポイト（Alt + クリック）で色を拾ったとき */
+  /** スポイトで色を拾ったとき */
   onPickColor: (hex: string) => void;
+  /** スポイトツールで色を拾い終えたとき（前のツールに戻す） */
+  onPickerDone: () => void;
   view: ViewTransform | null;
   setView: Dispatch<SetStateAction<ViewTransform | null>>;
   onViewportSize: (w: number, h: number) => void;
@@ -59,13 +65,15 @@ export interface CanvasViewProps {
  * - 操作: ツール（選択のタップ / 分割の線引き）、移動（手のひら・Space・中ボタン・ホイール）、
  *   ピンチ（拡大・回転・移動）、Ctrl/Cmd+ホイール（拡大）、2 本指タップ（取り消し）・3 本指タップ（やり直し）
  */
-export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickColor, view, setView, onViewportSize, onMessage, onCursor }: CanvasViewProps) {
+export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickColor, onPickerDone, view, setView, onViewportSize, onMessage, onCursor }: CanvasViewProps) {
   const { state, dispatch, bitmaps } = useEditor();
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const brushPreviewRef = useRef<HTMLCanvasElement>(null);
   const brushCursorRef = useRef<HTMLDivElement>(null);
+  const pickerRingRef = useRef<HTMLDivElement>(null);
+  const longPressRef = useRef(0);
   const compositor = useMemo(() => new Canvas2DCompositor(bitmaps), [bitmaps]);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -147,7 +155,9 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
     ctx.clearRect(0, 0, o.width, o.height);
     const accent = getComputedStyle(o).getPropertyValue("--accent").trim() || "#3b82f6";
 
-    for (const id of state.selectedIds) {
+    // 選択中のレイヤーの強調（半透明のアクセント色）。ペン・消しゴム・スポイトでは実際の色が分からなくなるので出さない
+    const tintSelection = tool !== "pen" && tool !== "eraser" && tool !== "picker";
+    for (const id of tintSelection ? state.selectedIds : []) {
       const n = findNode(doc.root, id);
       if (!n || n.kind !== "raster" || !n.visible) continue;
       const src = bitmaps.getCanvas(n.bitmapId);
@@ -182,7 +192,7 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
       ctx.stroke();
       ctx.setLineDash([]);
     }
-  }, [doc, state.selectedIds, bitmaps, scale]);
+  }, [doc, state.selectedIds, bitmaps, scale, tool]);
 
   useEffect(() => {
     drawOverlay();
@@ -317,14 +327,7 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
   const startPaint = (e: React.PointerEvent, p: Pt) => {
     const d = toDoc(p);
     if (e.altKey) {
-      // スポイト: 表示中の色（合成結果）を拾う。透明な所は白い紙の上の色とみなす
-      const c = canvasRef.current, x = Math.floor(d.x), y = Math.floor(d.y);
-      if (c && x >= 0 && y >= 0 && x < doc.width && y < doc.height) {
-        const px = c.getContext("2d")!.getImageData(x, y, 1, 1).data, a = px[3]! / 255;
-        const hex = toHex(px[0]! * a + 255 * (1 - a), px[1]! * a + 255 * (1 - a), px[2]! * a + 255 * (1 - a));
-        onPickColor(hex);
-        onMessage(`色を取得しました（${hex}）`);
-      }
+      beginPick(e.pointerId, p);
       return;
     }
     const id = state.selectedIds[state.selectedIds.length - 1];
@@ -353,6 +356,49 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
     paintRef.current = { session, layerId: target.id };
     gesture.current = { kind: "tool", id: e.pointerId, start: p, stroke: null };
     scheduleRender();
+    // 指で長押し → スポイト（描きかけの点は捨てる）。スタイラス・マウスはゆっくり描き始めることがあるので対象外
+    if (e.pointerType === "touch") {
+      const pid = e.pointerId;
+      clearTimeout(longPressRef.current);
+      longPressRef.current = window.setTimeout(() => {
+        const g = gesture.current;
+        if (g.kind !== "tool" || g.id !== pid || !paintRef.current) return;
+        paintRef.current = null;
+        renderNow();
+        beginPick(pid, pointers.current.get(pid) ?? p);
+      }, LONG_PRESS_MS);
+    }
+  };
+
+  // ---- スポイト ----
+  /** 表示中の色（全レイヤーの合成結果）を拾う。透明な所は白い紙の上の色とみなす。キャンバスの外は null */
+  const sampleAt = (p: Pt): string | null => {
+    const d = toDoc(p), c = canvasRef.current, x = Math.floor(d.x), y = Math.floor(d.y);
+    if (!c || x < 0 || y < 0 || x >= doc.width || y >= doc.height) return null;
+    const px = c.getContext("2d")!.getImageData(x, y, 1, 1).data, a = px[3]! / 255;
+    return toHex(px[0]! * a + 255 * (1 - a), px[1]! * a + 255 * (1 - a), px[2]! * a + 255 * (1 - a));
+  };
+  /** 拾っている色の表示（指で隠れないよう、押している位置の少し上に出す）。上半分が新しい色、下半分が今の色 */
+  const showPickerRing = (p: Pt | null, hex: string | null) => {
+    const el = pickerRingRef.current;
+    if (!el) return;
+    if (!p) {
+      el.style.display = "none";
+      return;
+    }
+    const vw = viewportRef.current?.clientWidth ?? 0;
+    const R = 44;
+    const cx = Math.min(Math.max(p.x, R + 4), vw - R - 4), cy = Math.max(p.y - 90, R + 4);
+    el.style.display = "block";
+    el.style.transform = `translate(${cx - R}px, ${cy - R}px)`;
+    (el.firstElementChild as HTMLElement).style.background = hex ?? "transparent";
+    (el.lastElementChild as HTMLElement).style.background = paint.pen.color;
+  };
+  const beginPick = (pointerId: number, p: Pt) => {
+    const hex = sampleAt(p);
+    gesture.current = { kind: "pick", id: pointerId, hex };
+    moveBrushCursor(null);
+    showPickerRing(p, hex);
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -369,6 +415,11 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
       }
       if (pointers.current.size >= 2) {
         // 2 本目の指: ツール操作を取り消してピンチへ
+        clearTimeout(longPressRef.current);
+        if (gesture.current.kind === "pick") {
+          gesture.current = { kind: "none" };
+          showPickerRing(null, null);
+        }
         if (gesture.current.kind === "tool") {
           gesture.current = { kind: "none" };
           drawOverlay();
@@ -393,6 +444,10 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
       return;
     }
     if (e.button !== 0) return;
+    if (tool === "picker") {
+      beginPick(e.pointerId, p);
+      return;
+    }
     if (tool === "pen" || tool === "eraser") {
       startPaint(e, p);
       return;
@@ -447,7 +502,12 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
         }
       }
       applyView(pinch(g.startView, g.p1, g.p2, q1, q2, g.rotate));
+    } else if (g.kind === "pick" && g.id === e.pointerId) {
+      g.hex = sampleAt(p);
+      showPickerRing(p, g.hex);
     } else if (g.kind === "tool" && g.id === e.pointerId && paintRef.current) {
+      // 長押しの判定中に動かしたら、スポイトにはしない
+      if (Math.hypot(p.x - g.start.x, p.y - g.start.y) > TAP_SLOP) clearTimeout(longPressRef.current);
       // ペンの途中の位置（まとめて届く分）もすべて使う
       const evs = (e.nativeEvent.getCoalescedEvents?.() ?? []) as PointerEvent[];
       for (const ev of evs.length > 0 ? evs : [e.nativeEvent]) {
@@ -499,8 +559,23 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
       setPanning(false);
       return;
     }
+    if (g.kind === "pick" && g.id === e.pointerId) {
+      gesture.current = { kind: "none" };
+      showPickerRing(null, null);
+      if (cancelled) return;
+      if (!g.hex) {
+        // 拾えなかったときはスポイトのまま（やり直せるように）
+        onMessage("キャンバスの外では色を拾えません", "error");
+        return;
+      }
+      onPickColor(g.hex);
+      onMessage(`色を取得しました（${g.hex}）`);
+      if (tool === "picker") onPickerDone();
+      return;
+    }
     if (g.kind !== "tool" || g.id !== e.pointerId) return;
     gesture.current = { kind: "none" };
+    clearTimeout(longPressRef.current);
     const ps = paintRef.current;
     paintRef.current = null;
     if (cancelled) {
@@ -588,8 +663,8 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
         ? "crosshair"
         : tool === "move"
           ? "none" // 円カーソルを表示
-          : tool === "pen" || tool === "eraser"
-            ? "crosshair" // 円カーソルと併用（小さいブラシでも位置が分かるように）
+          : tool === "pen" || tool === "eraser" || tool === "picker"
+            ? "crosshair" // ペン・消しゴムは円カーソルと併用（小さいブラシでも位置が分かるように）
           : "default";
   const stageStyle: React.CSSProperties = view
     ? { width: doc.width, height: doc.height, transform: cssTransform(view) }
@@ -620,6 +695,10 @@ export function CanvasView({ doc, tool, multiSelect, brushSize, paint, onPickCol
         <canvas ref={overlayRef} className="stage-canvas" />
       </div>
       <div ref={brushCursorRef} className="brush-cursor" aria-hidden />
+      <div ref={pickerRingRef} className="picker-ring" aria-hidden>
+        <div className="picker-new" />
+        <div className="picker-old" />
+      </div>
     </div>
   );
 }
