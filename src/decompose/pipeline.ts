@@ -10,7 +10,7 @@
  * 2〜4 は segment.ts で一括して行う（順序の理由は segment.ts の冒頭コメント参照）。
  */
 import { buildParts } from "./layers";
-import { extractLineart } from "./lineart";
+import { estimateLineWidth, extractLineart } from "./lineart";
 import { segment } from "./segment";
 import type { DecomposeParams, DecomposeResult, DecomposeStage, RasterImage } from "./types";
 
@@ -38,14 +38,20 @@ export function decompose(
     onProgress(stage, 0);
     const t0 = performance.now();
     const r = fn();
-    timings[stage] = performance.now() - t0;
+    timings[stage] = (timings[stage] ?? 0) + performance.now() - t0; // 同じ段階を複数回呼ぶ場合は合算
     onProgress(stage, 1);
     return r;
   };
 
-  const lineart = run("lineart", () => extractLineart(image, params.lineart));
+  // 線とみなす最大の太さ: 自動なら画像の線の太さから決める（推定できなければ手動の値）
+  const lineWidth = run("lineart", () => {
+    const auto = params.lineart.method === "tophat" && params.lineart.autoLineWidth;
+    const est = auto ? estimateLineWidth(image) : null;
+    return { auto, estimated: est ? est.width : null, used: est ? est.maxLineWidth : params.lineart.maxLineWidth };
+  });
+  const lineart = run("lineart", () => extractLineart(image, { ...params.lineart, maxLineWidth: lineWidth.used }));
   const seg = run("segment", () => segment(lineart, image, params.segment));
   const { parts, resolvedFill } = run("layers", () => buildParts(seg, params.segment.fill));
 
-  return { lineart, parts, resolvedFill, timings };
+  return { lineart, parts, resolvedFill, lineWidth, timings };
 }

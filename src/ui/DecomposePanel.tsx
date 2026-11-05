@@ -32,7 +32,15 @@ export const DecomposePanel = memo(function DecomposePanel({
           </select>
         </label>
         {p.lineart.method === "tophat" && (
-          <Range label="線とみなす最大の太さ" unit="px" min={2} max={64} step={1} value={p.lineart.maxLineWidth} onChange={(v) => setL({ maxLineWidth: v })} />
+          <>
+            <label className="check">
+              <input id="auto-line-width" type="checkbox" checked={p.lineart.autoLineWidth} onChange={(e) => setL({ autoLineWidth: e.target.checked })} />
+              線の太さを画像から自動で決める
+            </label>
+            {!p.lineart.autoLineWidth && (
+              <Range label="線とみなす最大の太さ" unit="px" min={2} max={160} step={1} value={p.lineart.maxLineWidth} onChange={(v) => setL({ maxLineWidth: v })} hint="これより太い暗い部分は、線ではなく塗りとして扱います" />
+            )}
+          </>
         )}
         <Range label="線の判定しきい値" unit="%" min={5} max={95} step={5} value={Math.round(p.segment.lineThreshold * 100)} onChange={(v) => setS({ lineThreshold: v / 100 })} />
         <Range label="隙間閉じ（半径）" unit="px" min={0} max={10} step={1} value={p.segment.gapRadius} onChange={(v) => setS({ gapRadius: v })} hint={`幅 ${p.segment.gapRadius * 2}px までの線の途切れを閉じます`} />

@@ -12,6 +12,10 @@
  *   3. ラベリング: シード画素を 4 近傍で連結成分ラベリングする。
  *      （4 近傍にすることで、8 近傍でつながった 1px の斜め線を塗りが通り抜けない）
  *      隣接画素の色差が colorTolerance を超える場合はつながない（線の無い色境界で領域を分けるため）。
+ *      さらに、上下左右のどれかと色差が colorTolerance を超える画素、または両隣（2 画素先どうし）の色差が
+ *      colorTolerance/2 を超える画素（色の縁）はシードにしない。
+ *      ゆるい角度のアンチエイリアスの縁には、縁に沿って色が少しずつ変わる画素が並ぶため、
+ *      隣どうしの比較だけだとそれを伝って別の色の領域がつながる（太い輪郭が線画にならなかった SVG で発生）。
  *   4. 成長（＝線下補完）: 全シードから同時に幅優先探索で、未割当の画素（膨張帯と線の下）へ広げる。
  *      まず線ではない画素だけに広げ、その後で線の下に広げる（2 段階。理由は実装部のコメント参照）。
  *      各画素は最も近い（測地距離）領域に割り当てられ、線の下は両側の領域で概ね半分ずつ分け合う。
@@ -96,6 +100,31 @@ export function segment(lineart: RasterImage, source: RasterImage, params: Segme
     return dr * dr + dg * dg + db * db <= tol2;
   };
   const joinable = (p: number, q: number) => isSeed[q] === 1 && labels[q] === -1 && similar(p, q);
+
+  // 色の縁の画素はシードにしない: 上下左右のどれかと色が離れている画素は、色の境目（アンチエイリアスの縁）にある。
+  // ゆるい角度の縁では、縁に沿って色が少しずつ変わる画素が並ぶ（隣どうしの差は許容量以内）ため、
+  // 隣の画素とだけ比べてつなぐと、その並びを伝ってピンク→輪郭の茶→背景の白のように別の色の領域がつながってしまう。
+  // 縁の画素は 4. の成長で隣の領域に割り当てられる。
+  // さらに、両隣（左右・上下の 2 画素先どうし）の色差が許容量の半分を超える画素も縁とみなす。
+  // 2 色の差が許容量を少しだけ超える境目（例: 体のピンクとほっぺの濃いピンク、差 ≈ 51）では、
+  // 境目の中間色の画素が両側と許容量以内になり、隣との比較だけでは縁と判定できずに両側をつないでしまう。
+  // 照明ムラのようななだらかな変化は 2 画素先でもほとんど差がないので、縁とはみなされない。
+  const half2 = tol2 / 4; // (許容量 / 2)^2
+  const far = (p: number, q: number) => {
+    const dr = cr[p]! - cr[q]!, dg = cg[p]! - cg[q]!, db = cb[p]! - cb[q]!;
+    return dr * dr + dg * dg + db * db > half2;
+  };
+  const edge: number[] = [];
+  for (let p = 0; p < n; p++) {
+    if (!isSeed[p]) continue;
+    const x = p % w;
+    if ((x > 0 && !similar(p, p - 1)) || (x < w - 1 && !similar(p, p + 1)) || (p >= w && !similar(p, p - w)) || (p + w < n && !similar(p, p + w))) {
+      edge.push(p);
+    } else if ((x > 0 && x < w - 1 && far(p - 1, p + 1)) || (p >= w && p + w < n && far(p - w, p + w))) {
+      edge.push(p);
+    }
+  }
+  for (const p of edge) isSeed[p] = 0;
 
   for (let start = 0; start < n; start++) {
     if (!isSeed[start] || labels[start] !== -1) continue;

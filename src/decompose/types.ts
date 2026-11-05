@@ -21,7 +21,12 @@ export type LineartMethod = "lightness" | "tophat";
 
 export interface LineartParams {
   method: LineartMethod;
-  /** tophat のみ: これより太い暗い領域は線ではなく塗りとみなす（px） */
+  /**
+   * tophat のみ: true なら「線とみなす最大の太さ」を画像から推定した線の太さで決める（maxLineWidth は使わない）。
+   * 拡大した SVG や高解像度の画像では線が太くなり、固定値では輪郭線が塗りと判定されるため既定で有効
+   */
+  autoLineWidth: boolean;
+  /** tophat のみ（autoLineWidth が false のとき）: これより太い暗い領域は線ではなく塗りとみなす（px） */
   maxLineWidth: number;
   /** これ以下の明度（0..1。L* を 100 で割った値）を完全な線（アルファ 1）とする */
   blackLevel: number;
@@ -65,7 +70,7 @@ export interface DecomposeParams {
 }
 
 export const DEFAULT_DECOMPOSE_PARAMS: DecomposeParams = {
-  lineart: { method: "tophat", maxLineWidth: 16, blackLevel: 0.2, whiteLevel: 0.9, lineColor: "black" },
+  lineart: { method: "tophat", autoLineWidth: true, maxLineWidth: 16, blackLevel: 0.2, whiteLevel: 0.9, lineColor: "black" },
   segment: {
     lineThreshold: 0.5,
     gapRadius: 2,
@@ -93,6 +98,8 @@ export interface DecomposedPart {
 export interface DecomposeResult {
   lineart: RasterImage;
   parts: DecomposedPart[];
+  /** 線画抽出で使った「線とみなす最大の太さ」。auto のときは推定した線の太さも（推定できなければ null） */
+  lineWidth: { auto: boolean; estimated: number | null; used: number };
   /** auto を解決した後の実際の塗り方 */
   resolvedFill: Exclude<FillMode, "auto">;
   /** 各ステージの処理時間（ms） */

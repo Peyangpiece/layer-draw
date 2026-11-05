@@ -68,7 +68,9 @@ export function App() {
       bitmaps.clear();
       dispatch({ type: "open", doc: buildDocumentFromImport(imported, result, params, bitmaps) });
       const total = Object.values(result.timings).reduce((a, b) => a + b, 0);
-      return `パーツ ${result.parts.length} 個に分解しました（塗り: ${FILL_LABEL[result.resolvedFill]}・${(total / 1000).toFixed(1)} 秒）`;
+      const lw = result.lineWidth;
+      const lineNote = lw.auto && lw.estimated !== null ? `・線の太さ 約${lw.estimated}px` : "";
+      return `パーツ ${result.parts.length} 個に分解しました（塗り: ${FILL_LABEL[result.resolvedFill]}${lineNote}・${(total / 1000).toFixed(1)} 秒）`;
     },
     [bitmaps, dispatch],
   );

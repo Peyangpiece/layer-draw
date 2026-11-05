@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { lightness01 } from "./color";
-import { extractLineart } from "./lineart";
+import { estimateLineWidth, extractLineart } from "./lineart";
 import { decompose } from "./pipeline";
 import { Sketch } from "./testImages";
 import { DEFAULT_DECOMPOSE_PARAMS } from "./types";
@@ -106,5 +106,37 @@ describe("decompose pipeline", () => {
     expect(r.lineart.width).toBe(2);
     expect(Object.keys(r.timings)).toContain("lineart");
     expect(() => decompose(src, DEFAULT_DECOMPOSE_PARAMS, undefined, { cancelled: true })).toThrow("cancelled");
+  });
+});
+
+describe("estimateLineWidth", () => {
+  const rings = (lineW: number, size = 400) => {
+    const s = new Sketch(size, size);
+    for (const r of [60, 110, 160]) s.strokeCircle(size / 2, size / 2, r, lineW);
+    return s;
+  };
+  it.each([3, 8, 20, 38])("太さ %ipx の線を推定できる（±2px）", (lineW) => {
+    const e = estimateLineWidth(rings(lineW).image())!;
+    expect(Math.abs(e.width - lineW)).toBeLessThanOrEqual(2);
+  });
+  it("大きな暗い塗りがあっても、線の太さを選ぶ", () => {
+    const s = rings(6);
+    s.fillRect(20, 20, 120, 90, [20, 20, 20]); // 黒ベタ
+    s.fillRect(260, 280, 110, 100, [60, 40, 40]);
+    expect(Math.abs(estimateLineWidth(s.image())!.width - 6)).toBeLessThanOrEqual(2);
+  });
+  it("判定上限は推定値の 1.5 倍で、16〜160px に収める", () => {
+    expect(estimateLineWidth(rings(3).image())!.maxLineWidth).toBe(16);
+    const e = estimateLineWidth(rings(38).image())!;
+    expect(e.maxLineWidth).toBe(Math.ceil(e.width * 1.5));
+  });
+  it("大きな画像（長辺 1024px 超）は縮小して推定しても、太さを ±倍率 程度で求められる", () => {
+    const big = new Sketch(2400, 2400);
+    for (const r of [400, 700, 1000]) big.strokeCircle(1200, 1200, r, 40);
+    const e = estimateLineWidth(big.image())!; // 3 倍に縮小して推定
+    expect(Math.abs(e.width - 40)).toBeLessThanOrEqual(6);
+  });
+  it("暗い画素がほとんど無ければ null", () => {
+    expect(estimateLineWidth(new Sketch(100, 100).image())).toBeNull();
   });
 });

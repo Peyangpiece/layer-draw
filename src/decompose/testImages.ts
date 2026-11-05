@@ -31,6 +31,38 @@ export class Sketch {
       }
     }
   }
+  /**
+   * アンチエイリアス付きの塗りつぶし楕円。縁の近くの画素だけ 16×16 の超標本化で被覆率を求め、既存の色と混ぜる。
+   * ブラウザの描画と同じく被覆率がほぼ連続的に変わるので、ゆるい角度の縁では
+   * 縁に沿って色が少しずつ変わる画素の並びができる（4×4 程度だと段差が粗く、この並びが再現されない）
+   */
+  fillEllipseAA(cx: number, cy: number, rx: number, ry: number, rgb: [number, number, number]) {
+    const N = 16;
+    const x0 = Math.max(0, Math.floor(cx - rx - 1)), x1 = Math.min(this.width - 1, Math.ceil(cx + rx + 1));
+    const y0 = Math.max(0, Math.floor(cy - ry - 1)), y1 = Math.min(this.height - 1, Math.ceil(cy + ry + 1));
+    const band = 2 / Math.min(rx, ry); // 縁からおよそ 2px 以内だけ超標本化する
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const r = Math.sqrt(((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2);
+        let a: number;
+        if (r < 1 - band) a = 1;
+        else if (r > 1 + band) a = 0;
+        else {
+          let hit = 0;
+          for (let sy = 0; sy < N; sy++) for (let sx = 0; sx < N; sx++) {
+            const px = x + (sx + 0.5) / N, py = y + (sy + 0.5) / N;
+            if (((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2 <= 1) hit++;
+          }
+          a = hit / (N * N);
+        }
+        if (a === 0) continue;
+        const o = (y * this.width + x) * 4;
+        for (let c = 0; c < 3; c++) this.data[o + c] = Math.round(this.data[o + c]! * (1 - a) + rgb[c]! * a);
+        this.data[o + 3] = 255;
+      }
+    }
+  }
+
   image(): RasterImage {
     return { width: this.width, height: this.height, data: this.data };
   }

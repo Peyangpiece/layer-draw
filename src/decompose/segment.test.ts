@@ -134,6 +134,39 @@ describe("segment", () => {
     expect(labelAt(r, 25, 30)).not.toBe(labelAt(r, 75, 30));
   });
 
+  it("ゆるい角度のアンチエイリアスの縁を伝って、色の違う領域どうしがつながらない", () => {
+    // 白背景・太い茶色の輪郭（maxLineWidth より太いので線画にならない）・内側ピンク
+    const s = new Sketch(700, 500);
+    s.fillEllipseAA(350, 250, 300, 200, [90, 58, 58]);
+    s.fillEllipseAA(350, 250, 270, 170, [255, 184, 198]);
+    const r = seg(s, { gapRadius: 2, borderAsBackground: true });
+    const inside = labelAt(r, 350, 250), ring = labelAt(r, 350, 65), outside = labelAt(r, 5, 5);
+    expect(inside).not.toBe(outside);
+    expect(inside).not.toBe(ring);
+    expect(r.isBackground[inside]).toBe(false);
+    expect(r.meanColors[inside]!.map(Math.round)).toEqual([255, 184, 198]);
+  });
+
+  it("色の差が許容量を少しだけ超える境目（線なし）も、中間色の画素を伝ってつながらない", () => {
+    // 体のピンクの上に、少しだけ濃いピンクのハート（ほっぺ）。色差 ≈ 51 > 許容量 40。境目はアンチエイリアス
+    const s = new Sketch(400, 300);
+    s.fillRect(0, 0, 400, 300, [255, 184, 198]);
+    s.fillEllipseAA(200, 150, 90, 60, [255, 143, 168]);
+    const r = seg(s, { borderAsBackground: false });
+    const heart = labelAt(r, 200, 150), body = labelAt(r, 20, 20);
+    expect(heart).not.toBe(body);
+    expect(r.meanColors[heart]!.map(Math.round)).toEqual([255, 143, 168]);
+  });
+
+  it("照明ムラのようななだらかな色の変化では、領域が帯状に分かれない", () => {
+    // 紙の明るさが左 130 → 右 254 に変わる。枠で囲んだ内側は 1 つの領域のまま
+    const s = new Sketch(400, 200);
+    for (let x = 0; x < 400; x++) { const v = Math.round(130 + (x * 124) / 399); s.fillRect(x, 0, 1, 200, [v, v, v]); }
+    s.strokeRect(10, 10, 380, 180, 3);
+    const r = seg(s, { borderAsBackground: false });
+    expect(labelAt(r, 30, 100)).toBe(labelAt(r, 370, 100));
+  });
+
   it("領域の平均色は元画像の色（線を除く）", () => {
     const s = new Sketch(60, 60);
     s.fillRect(10, 10, 40, 40, [200, 40, 40]);
