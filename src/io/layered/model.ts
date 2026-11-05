@@ -20,6 +20,8 @@ export interface ImportedRaster extends ImportedLayerBase {
   x: number;
   y: number;
   image: RasterImage;
+  /** 透明度保護（PSD のみ） */
+  alphaLocked?: boolean;
 }
 
 export interface ImportedGroup extends ImportedLayerBase {

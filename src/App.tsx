@@ -1,10 +1,12 @@
-import { ImagePlus, Layers, LoaderCircle, Redo2, Undo2, Upload, X } from "lucide-react";
+import { ImagePlus, Layers, LoaderCircle, Redo2, Save, Undo2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { findNode, listRasterLayers } from "./core/document";
+import type { LayerDocument } from "./core/types";
 import { canRedo, canUndo } from "./core/history";
 import { runDecompose, type DecomposeJob } from "./decompose/client";
 import { recolorPartsFrom } from "./decompose/layers";
 import { DEFAULT_DECOMPOSE_PARAMS, type DecomposeParams, type DecomposeResult, type DecomposeStage } from "./decompose/types";
+import { canPickLocation, downloadBlob, fileNameFor, FORMAT_INFO, isEmbedded, pickSaveFile, writeToHandle, type SaveFormat } from "./io/export/save";
 import { ACCEPT_ATTR } from "./io/formats";
 import { importFile } from "./io/importFile";
 import type { ImportedImage } from "./io/importImage";
@@ -13,10 +15,12 @@ import { buildDecomposedFolder, buildDocumentFromImport } from "./store/buildFro
 import { buildDocumentFromLayered, placeOnCanvas } from "./store/buildFromLayered";
 import { useEditor } from "./store/editorStore";
 import { mergeSelected } from "./store/partActions";
+import { Canvas2DCompositor } from "./render/compositor";
 import { CanvasView, type CanvasTool, type MessageKind } from "./ui/CanvasView";
 import { ContextBar, DEFAULT_PAINT, StatusBar, stepPaintSize, stepBrushSize, Toasts, ToolRail, ZoomControl, type PaintSettings, type Toast } from "./ui/Chrome";
 import { DecomposePanel } from "./ui/DecomposePanel";
 import { LayerPanel } from "./ui/LayerPanel";
+import { SaveDialog, type SaveRequest } from "./ui/SaveDialog";
 import { centerAt, fitView, nextPreset, rotateTo, rotationDegrees, zoomTo, type Pt, type ViewTransform } from "./ui/viewport";
 
 const STAGE_LABEL: Record<DecomposeStage, string> = {
@@ -39,6 +43,32 @@ function decomposeSummary(result: DecomposeResult): string {
 const TOOL_KEYS: Record<string, CanvasTool> = { v: "select", c: "split", b: "move", p: "pen", e: "eraser", i: "picker", h: "hand" };
 
 type Busy = { label: string; job?: DecomposeJob } | null;
+
+/** 最後に保存した内容と保存先（レイヤー付きで保存した = 作業を保存した、とみなす PSD のみ） */
+interface SavedInfo {
+  docId: string;
+  /** 保存した時点のドキュメント（今のものと同じなら「保存済み」） */
+  present: LayerDocument;
+  fileName: string;
+  /** picked: 保存ダイアログで選んだファイル / downloads: ブラウザのダウンロード */
+  where: "picked" | "downloads";
+  /** 上書き保存に使う（保存先を選んだ場合・アプリでファイルを開いた場合） */
+  handle?: FileSystemFileHandle;
+}
+const WHERE_LABEL = { picked: "選んだフォルダ", downloads: "「ダウンロード」フォルダ" } as const;
+
+/** 画面と同じ合成で、PNG または PSD のデータを作る */
+async function encodeDocument(doc: LayerDocument, bitmaps: ReturnType<typeof useEditor>["bitmaps"], format: SaveFormat): Promise<Blob> {
+  const canvas = document.createElement("canvas");
+  new Canvas2DCompositor(bitmaps).render(doc, canvas);
+  if (format === "png") {
+    return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("PNG を作れませんでした"))), "image/png"));
+  }
+  const composite = canvas.getContext("2d")!.getImageData(0, 0, doc.width, doc.height);
+  const { writeDocumentPsd } = await import("./io/export/psd");
+  const bytes = writeDocumentPsd(doc, (id) => bitmaps.get(id), composite);
+  return new Blob([bytes], { type: FORMAT_INFO.psd.mime });
+}
 
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName));
@@ -73,6 +103,12 @@ export function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const h = state.history;
   const doc = h?.present;
+  const [saved, setSaved] = useState<SavedInfo | null>(null);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const lastFormatRef = useRef<SaveFormat>("psd");
+  const savedForDoc = saved && doc && saved.docId === doc.id ? saved : null;
+  /** 最後に PSD で保存してから変更があるか（まだ保存していなければ true） */
+  const dirty = !!doc && savedForDoc?.present !== doc;
 
   // ---------------------------------------------------------------- 通知
   const nextToastId = useRef(1);
@@ -100,7 +136,7 @@ export function App() {
   );
 
   const openFile = useCallback(
-    async (file: File) => {
+    async (file: File, handle?: FileSystemFileHandle) => {
       setBusy({ label: "画像を読み込んでいます" });
       try {
         const res = await importFile(file);
@@ -108,7 +144,10 @@ export function App() {
           // レイヤー付きのファイルは、レイヤー構成のまま開く（自動分解はしない）
           const imp = res.layered;
           bitmaps.clear();
-          dispatch({ type: "open", doc: buildDocumentFromLayered(imp, bitmaps) });
+          const opened = buildDocumentFromLayered(imp, bitmaps);
+          dispatch({ type: "open", doc: opened });
+          // アプリで PSD を開いた場合（launchQueue）は、そのファイルに上書き保存できる
+          if (handle && imp.format === "psd") setSaved({ docId: opened.id, present: opened, fileName: handle.name, where: "picked", handle });
           showMessage(`${imp.format.toUpperCase()} のレイヤー ${countRasters(imp.children)} 枚を読み込みました。分解したいレイヤーを選び、「自動分解の設定」から分解できます`);
           // 警告はまとめて 1 つにする（通知は最大 3 件なので、個別に出すと他の通知が押し出される）
           if (imp.warnings.length > 0) showMessage(`反映できなかった内容: ${imp.warnings.join("。")}`, "error");
@@ -247,13 +286,83 @@ export function App() {
     showMessage(r.ok ? r.message : r.reason, r.ok ? "info" : "error");
   };
 
+  // ---------------------------------------------------------------- 保存
+  const saveAs = async ({ format, baseName }: SaveRequest) => {
+    setSaveOpen(false);
+    if (!doc) return;
+    lastFormatRef.current = format;
+    const name = fileNameFor(baseName, format);
+    const snapshot = doc;
+    try {
+      // 保存ダイアログは、ボタンを押した直後（利用者の操作の中）で開く必要があるので、データを作る前に開く
+      let handle: FileSystemFileHandle | null = null;
+      if (canPickLocation()) {
+        handle = await pickSaveFile(name, format);
+        if (!handle) return; // キャンセル
+      }
+      setBusy({ label: "保存しています" });
+      const blob = await encodeDocument(snapshot, bitmaps, format);
+      const where = handle ? "picked" : "downloads";
+      const fileName = handle?.name ?? name;
+      if (handle) await writeToHandle(handle, blob);
+      else downloadBlob(blob, name);
+      if (format === "psd") setSaved({ docId: snapshot.id, present: snapshot, fileName, where, handle: handle ?? undefined });
+      const layersNote = format === "png" ? "。レイヤーは含まれません（続きを編集するには PSD で保存してください）" : "";
+      if (!handle && isEmbedded()) {
+        showMessage(`「${fileName}」のダウンロードを始めました${layersNote}。保存されない場合は、Dock に追加したアプリ版から保存してください`);
+      } else {
+        showMessage(`「${fileName}」を${WHERE_LABEL[where]}に保存しました${layersNote}`);
+      }
+    } catch (e) {
+      showMessage(`保存できませんでした（${e instanceof Error ? e.message : String(e)}）`, "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Ctrl/⌘+S: 保存先を選んで保存したファイルがあれば上書き、無ければ保存ダイアログ */
+  const quickSave = async () => {
+    if (!doc) return;
+    const s = savedForDoc;
+    if (!s?.handle) {
+      setSaveOpen(true);
+      return;
+    }
+    const snapshot = doc;
+    try {
+      setBusy({ label: "保存しています" });
+      await writeToHandle(s.handle, await encodeDocument(snapshot, bitmaps, "psd"));
+      setSaved({ ...s, present: snapshot });
+      showMessage(`「${s.fileName}」に上書き保存しました`);
+    } catch (e) {
+      showMessage(`上書き保存できませんでした（${e instanceof Error ? e.message : String(e)}）。「保存」から保存し直してください`, "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+  // キー操作の処理（一度だけ登録）から、今のドキュメントでの保存を呼ぶため
+  const saveKeysRef = useRef({ quickSave: () => {}, open: () => {} });
+  saveKeysRef.current = { quickSave: () => void quickSave(), open: () => doc && setSaveOpen(true) };
+
+  // 保存していない変更があるまま閉じようとしたら、ブラウザの確認を出す
+  const warnOnClose = dirty && (!!savedForDoc || (!!h && canUndo(h)));
+  useEffect(() => {
+    if (!warnOnClose) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [warnOnClose]);
+
   // ---------------------------------------------------------------- ファイルから起動
   // インストールしたアプリで画像を「このアプリで開く」と、launchQueue 経由でファイルが渡される（Chrome / Edge）
   useEffect(() => {
     const lq = (window as unknown as { launchQueue?: { setConsumer(cb: (p: { files?: FileSystemFileHandle[] }) => void): void } }).launchQueue;
     lq?.setConsumer(async (params) => {
       const handle = params.files?.[0];
-      if (handle) void openFile(await handle.getFile());
+      if (handle) void openFile(await handle.getFile(), handle);
     });
   }, [openFile]);
 
@@ -284,6 +393,10 @@ export function App() {
       } else if (mod && e.key === "1") {
         e.preventDefault();
         setScale(1);
+      } else if (mod && k === "s") {
+        e.preventDefault();
+        if (e.shiftKey) saveKeysRef.current.open();
+        else saveKeysRef.current.quickSave();
       } else if (mod && k === "o") {
         e.preventDefault();
         fileRef.current?.click();
@@ -346,6 +459,12 @@ export function App() {
             <ImagePlus size={16} />
             <span className="btn-label">開く</span>
           </button>
+          {doc && (
+            <button className="btn" onClick={() => setSaveOpen(true)} title={savedForDoc?.handle ? `保存（⌘S / Ctrl+S で「${savedForDoc.fileName}」に上書き）` : "保存 (Ctrl+S)"}>
+              <Save size={16} />
+              <span className="btn-label">保存</span>
+            </button>
+          )}
           <span className="divider" aria-hidden />
           <button className="icon-btn" disabled={!h || !canUndo(h)} onClick={() => dispatch({ type: "undo" })} aria-label="取り消し" title="取り消し (Ctrl+Z)">
             <Undo2 size={17} />
@@ -359,6 +478,12 @@ export function App() {
             <>
               <span className="doc-name">{doc.name}</span>
               <span className="doc-sub">{doc.source?.format.toUpperCase()}</span>
+              <span
+                className={`save-state${dirty ? " dirty" : ""}`}
+                title={savedForDoc ? `最後の保存: ${savedForDoc.fileName}（${WHERE_LABEL[savedForDoc.where]}）` : "まだ保存していません。「保存」から PSD で保存すると、レイヤーを保ったまま続きを編集できます"}
+              >
+                {!savedForDoc ? "未保存" : dirty ? "未保存の変更あり" : `保存済み: ${savedForDoc.fileName}（${WHERE_LABEL[savedForDoc.where]}）`}
+              </span>
             </>
           ) : null}
         </div>
@@ -459,6 +584,18 @@ export function App() {
         />
       )}
 
+      {saveOpen && doc && (
+        <SaveDialog
+          defaultName={(savedForDoc?.fileName ?? doc.name).replace(/\.(psd|png)$/i, "")}
+          defaultFormat={lastFormatRef.current}
+          canPick={canPickLocation()}
+          embedded={isEmbedded()}
+          overwriteName={savedForDoc?.handle ? savedForDoc.fileName : undefined}
+          onSave={(r) => void saveAs(r)}
+          onCancel={() => setSaveOpen(false)}
+        />
+      )}
+
       {confirmReq && (
         <ConfirmDialog
           {...confirmReq}
@@ -552,7 +689,8 @@ function EmptyState({ onOpen }: { onOpen: () => void }) {
         <button className="btn primary lg" onClick={onOpen}>
           画像を開く
         </button>
-        <p className="muted">またはここにドラッグ＆ドロップ ・ PNG / JPEG / SVG</p>
+        <p className="muted">またはここにドラッグ＆ドロップ ・ PNG / JPEG / SVG / PSD / ORA</p>
+        <p className="muted">保存した PSD を開くと、レイヤーを保ったまま続きから編集できます。</p>
       </div>
     </div>
   );

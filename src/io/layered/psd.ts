@@ -118,7 +118,7 @@ function convertLayer(layer: Layer, warnings: WarningSet): ImportedNode | null {
 
   const blend = psdBlend(layer.blendMode);
   if (blend === null) warnings.add(`合成モード「${psdBlendLabel(layer.blendMode!)}」には対応していないため「通常」にしました`);
-  return { kind: "raster", ...base, blendMode: blend ?? "normal", x, y, image };
+  return { kind: "raster", ...base, blendMode: blend ?? "normal", x, y, image, alphaLocked: !!layer.transparencyProtected };
 }
 
 function toRaster(p: { width: number; height: number; data: ArrayLike<number> }): RasterImage {

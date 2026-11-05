@@ -17,6 +17,7 @@ function toNodes(nodes: ImportedNode[], store: BitmapStore): LayerNode[] {
     if (n.kind === "group") return { ...createGroup(n.name, toNodes(n.children, store)), ...common, expanded: n.expanded };
     return createRasterLayer({
       ...common,
+      alphaLocked: !!n.alphaLocked,
       bitmapId: store.add(toImageData(n.image)),
       bounds: { x: n.x, y: n.y, w: n.image.width, h: n.image.height },
     });

@@ -386,13 +386,15 @@ kbd { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 /* ===================================================================== 狭い画面（スマホ縦など） */
 @media (max-width: 720px) {
   :root { --bar-h: 48px; }
-  .brand-name, .btn-label, .context-hint, .doc-sub { display: none; }
+  .brand-name, .btn-label, .context-hint, .doc-sub, .save-state:not(.dirty) { display: none; }
   /* ツール名は下部のツールバーに出ているので、オプションバーでは省く */
   .context-title, .context-title + .divider { display: none; }
   .context-field input[type="range"] { width: 96px; }
   .brand { margin-right: 2px; }
   .app-bar { grid-template-columns: auto 1fr auto; padding: 0 4px; }
   .doc-name { max-width: 100%; font-size: 12px; }
+  .save-state.dirty { font-size: 0; }
+  .save-state.dirty::before { margin-right: 0; }
   .zoom-control .icon-btn { display: none; }
   .zoom-value { min-width: 64px; }
   .panel-toggle { display: inline-flex; }
@@ -421,3 +423,34 @@ kbd { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 @media (max-width: 720px) and (prefers-reduced-motion: reduce) {
   .side-panel { transition: none; }
 }
+
+/* ===================================================================== 保存 */
+.save-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; }
+.save-dialog .field-label { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-top: 6px; }
+.save-formats { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.save-formats legend { padding: 0; margin-bottom: 6px; }
+.format-choice {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: pointer; background: var(--bg-input);
+}
+.format-choice.checked { border-color: var(--accent); background: var(--accent-weak); }
+.format-choice input { margin-top: 3px; accent-color: var(--accent); }
+.format-choice > span { display: flex; flex-direction: column; gap: 2px; }
+.format-title { font-weight: 600; font-size: 13px; color: var(--text); }
+.format-note { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.name-field { display: flex; align-items: center; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); }
+.name-field:focus-within { border-color: var(--accent); }
+.name-field input { flex: 1; min-width: 0; border: none; background: none; color: var(--text); padding: 8px 10px; font: inherit; outline: none; }
+.name-ext { padding: 0 10px; color: var(--text-muted); font-size: 12px; }
+.save-location {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--bg-input); border: 1px solid var(--border);
+}
+.save-location > svg { color: var(--accent); flex-shrink: 0; margin-top: 1px; }
+.save-location > div { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.save-location strong { color: var(--text); font-size: 13px; }
+.modal.dialog p.save-note { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.5; margin-top: 4px; }
+.save-note svg { flex-shrink: 0; margin-top: 2px; }
+.save-note.warn svg { color: var(--warning, #e0a030); }
+.save-state { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.save-state.dirty::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #e0a030; margin-right: 5px; vertical-align: 1px; }
